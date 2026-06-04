@@ -1,0 +1,95 @@
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ${SANDBOX_NAME:-vibebox}-tailscale
+    hostname: ${SANDBOX_NAME:-vibebox}
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false # Runs in high-performance kernel TUN mode (required for TS_DEST_IP routing)
+      - TS_DEST_IP=127.0.0.1 # Route incoming Tailnet connections on port 22 to local SSH.
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+    cap_add:
+      - NET_ADMIN
+    ports:
+      # Secure local backup: Bind host port 22 to container port 22 on localhost
+      # (Note: Will conflict if Windows native OpenSSH Server is active on port 22)
+      - "127.0.0.1:${SSH_PORT:-22}:22"
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--peers=false"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Dynamically inject the username, defaulting to 'dev'
+        - USERNAME=${SANDBOX_USERNAME:-dev}
+        - BASE_IMAGE=${BASE_IMAGE:-ubuntu:24.04}
+        - NODE_MAJOR=${NODE_MAJOR:-22}
+        - BUN_VERSION=${BUN_VERSION:-latest}
+        - CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION:-latest}
+        - CODEX_VERSION=${CODEX_VERSION:-latest}
+        - PYRIGHT_VERSION=${PYRIGHT_VERSION:-latest}
+        - TYPESCRIPT_VERSION=${TYPESCRIPT_VERSION:-latest}
+        - TYPESCRIPT_LANGUAGE_SERVER_VERSION=${TYPESCRIPT_LANGUAGE_SERVER_VERSION:-latest}
+        - VSCODE_LANGSERVERS_VERSION=${VSCODE_LANGSERVERS_VERSION:-latest}
+        - YAML_LANGUAGE_SERVER_VERSION=${YAML_LANGUAGE_SERVER_VERSION:-latest}
+        - BASH_LANGUAGE_SERVER_VERSION=${BASH_LANGUAGE_SERVER_VERSION:-latest}
+        - TAILWIND_LANGUAGE_SERVER_VERSION=${TAILWIND_LANGUAGE_SERVER_VERSION:-latest}
+    container_name: ${SANDBOX_NAME:-vibebox}
+    image: ${SANDBOX_NAME:-vibebox}:latest
+    # Share the network namespace of the tailscale container
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    environment:
+      - SANDBOX_NAME=${SANDBOX_NAME:-vibebox}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      # Mount the public SSH keys as read-only from the host into the user's home folder
+      - ./authorized_keys:/home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys:ro
+      # Persist the user's home directory so settings and user files survive rebuilds
+      - sandbox_home:/home/${SANDBOX_USERNAME:-dev}
+      # Persist common system folders that accumulate real config drift over time.
+      # Each is seeded from the image on first creation, then survives down/up.
+      # Trade-off: once seeded, later image changes to these paths are shadowed by
+      # the volume until it is recreated (see README "Persistence And State").
+      - sandbox_etc:/etc
+      - sandbox_opt:/opt
+      - sandbox_usr_local:/usr/local
+      # Mount the host backups folder to /backups inside the container so internal backups write directly to the backups folder
+      - ./backups/${SANDBOX_NAME:-vibebox}:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -x sshd >/dev/null && test -s /home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    mem_limit: ${SANDBOX_MEM_LIMIT:-8g}
+    cpus: ${SANDBOX_CPUS:-4}
+    pids_limit: ${SANDBOX_PIDS_LIMIT:-512}
+    restart: unless-stopped
+
+volumes:
+  # Named volume for persistent user home directory data
+  sandbox_home:
+    name: ${SANDBOX_NAME:-vibebox}-home
+  # Named volumes for persisted system folders (config drift + self-installed tools)
+  sandbox_etc:
+    name: ${SANDBOX_NAME:-vibebox}-etc
+  sandbox_opt:
+    name: ${SANDBOX_NAME:-vibebox}-opt
+  sandbox_usr_local:
+    name: ${SANDBOX_NAME:-vibebox}-usr-local
+  # Named volume to persist Tailscale authentication and state between container runs
+  tailscale_state:
+    name: ${SANDBOX_NAME:-vibebox}-tailscale-state

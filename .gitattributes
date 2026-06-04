@@ -1,0 +1,6 @@
+# Ensure shell scripts and container files always use LF, even when committed
+# from a Windows host with core.autocrlf enabled. CRLF would break the shebang
+# on Linux and the heredocs baked into the Dockerfile.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf

@@ -1,0 +1,8 @@
+.env
+authorized_keys
+backups/
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.log
