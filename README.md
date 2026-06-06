@@ -26,7 +26,8 @@ For mostly vibe-coding, web apps, scripts, CLIs, and normal project work, this i
 Use CUDA only when you actually need CUDA runtime libraries inside the container:
 
 ```env
-BASE_IMAGE=nvidia/cuda:latest
+# Pin a specific CUDA patch tag rather than :latest for reproducible rebuilds.
+BASE_IMAGE=nvidia/cuda:13.3.0-cudnn-runtime-ubuntu24.04
 ```
 
 If you use the CUDA base and need GPU passthrough, start with the GPU override:
@@ -47,7 +48,8 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
    SSH_PORT=22
    ```
 
-   Use a different `SANDBOX_NAME` and `SSH_PORT` for each sandbox.
+   Use a different `SANDBOX_NAME` and `SSH_PORT` for each sandbox. Also set
+   `TS_AUTHKEY` (see step 5 and `.env.example`) so Tailscale logs in automatically.
 
 3. Create `authorized_keys` from the example and add your public SSH key:
 
@@ -73,23 +75,44 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
    ./setup-sandbox.sh
    ```
 
-5. Authenticate Tailscale:
+5. Authenticate Tailscale.
+
+   Recommended: set `TS_AUTHKEY` in `.env` to a **reusable + ephemeral** auth key
+   from <https://login.tailscale.com/admin/settings/keys>, and the node logs in
+   automatically on startup. Without an auth key the tailscale container has
+   nothing to log in with, exits, and gets restarted every ~minute — which also
+   breaks local SSH — so an auth key is strongly recommended. An *ephemeral* key
+   additionally keeps your tailnet tidy: a stale node auto-removes when it goes
+   offline, so you don't accumulate `<SANDBOX_NAME>-1`, `<SANDBOX_NAME>-2`, ...
+
+   To authenticate interactively instead, leave `TS_AUTHKEY` blank and open the
+   login URL printed in the container logs:
 
    ```powershell
    docker logs <SANDBOX_NAME>-tailscale
    ```
 
-6. Connect locally:
+6. Connect locally (from the Docker host):
 
    ```powershell
-   ssh -p <SSH_PORT> <SANDBOX_USERNAME>@localhost
+   ssh -p <SSH_PORT> <SANDBOX_USERNAME>@127.0.0.1
    ```
 
-   Connect remotely from your tailnet:
+   Use `127.0.0.1`, **not** `localhost`: the port is published IPv4-only, and on
+   Windows `localhost` resolves to IPv6 (`::1`) first, which fails with
+   "Connection refused". The setup scripts also write an `~/.ssh/config` alias on
+   the host, so you can just run `ssh <SANDBOX_NAME>`.
+
+   Connect remotely from any other device on your tailnet:
 
    ```bash
    ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>
    ```
+
+   The tailnet connection always uses SSH port **22** — do **not** pass
+   `-p <SSH_PORT>`. `SSH_PORT` only remaps the host-local port on the Docker host
+   (`127.0.0.1:<SSH_PORT> -> 22`); it has no effect over the tailnet, where
+   Tailscale routes the node's port 22 to the container's sshd.
 
 ## Persistence And State
 
