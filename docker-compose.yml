@@ -16,6 +16,11 @@ services:
       - tailscale_state:/var/lib/tailscale
     cap_add:
       - NET_ADMIN
+    # TS_DEST_IP=127.0.0.1 installs a DNAT rule to loopback; the kernel drops packets
+    # routed to 127.0.0.1 from a non-loopback interface unless route_localnet is enabled.
+    # Without this, remote tailnet SSH (ssh user@<sandbox>) silently times out.
+    sysctls:
+      - net.ipv4.conf.all.route_localnet=1
     ports:
       # Secure local backup: Bind host port 22 to container port 22 on localhost
       # (Note: Will conflict if Windows native OpenSSH Server is active on port 22)
