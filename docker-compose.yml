@@ -7,6 +7,9 @@ services:
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false # Runs in high-performance kernel TUN mode (required for TS_DEST_IP routing)
       - TS_DEST_IP=127.0.0.1 # Route incoming Tailnet connections on port 22 to local SSH.
+      # Auth key for non-interactive login. Without it the container exits and crash-loops,
+      # orphaning the sandbox netns and breaking even local SSH. See .env.example.
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
     devices:
       - /dev/net/tun:/dev/net/tun
     volumes:
