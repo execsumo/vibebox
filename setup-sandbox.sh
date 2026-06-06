@@ -73,12 +73,45 @@ else
     echo "${GREEN}'authorized_keys' file already exists and is configured.${RESET}"
 fi
 
-# 3. Build and launch the container stack
+# 3. Write/refresh a local SSH alias so you can connect with `ssh <SandboxName>`.
+#    Uses 127.0.0.1 (not localhost): the port is published IPv4-only, and on a
+#    Windows host localhost resolves to ::1 first. Idempotent: a marked block per sandbox.
+SshConfigDir="$HOME/.ssh"
+SshConfigPath="$SshConfigDir/config"
+BeginMarker=">>> sandbox alias: $SandboxName (managed by setup-sandbox) >>>"
+EndMarker="<<< sandbox alias: $SandboxName <<<"
+mkdir -p "$SshConfigDir"; chmod 700 "$SshConfigDir"
+touch "$SshConfigPath"; chmod 600 "$SshConfigPath"
+# Remove any previous managed block for this sandbox (markers included), then strip
+# trailing blank lines so we re-append cleanly.
+TmpConfig="$(mktemp)"
+awk -v b="# $BeginMarker" -v e="# $EndMarker" '
+    $0 == b { skip = 1; next }
+    skip && $0 == e { skip = 0; next }
+    !skip { print }
+' "$SshConfigPath" | awk '
+    { lines[NR] = $0 }
+    END { last = NR; while (last > 0 && lines[last] ~ /^[[:space:]]*$/) last--; for (i = 1; i <= last; i++) print lines[i] }
+' > "$TmpConfig"
+mv "$TmpConfig" "$SshConfigPath"
+chmod 600 "$SshConfigPath"
+[ -s "$SshConfigPath" ] && echo "" >> "$SshConfigPath"
+{
+    echo "# $BeginMarker"
+    echo "Host $SandboxName"
+    echo "    HostName 127.0.0.1"
+    echo "    Port $SshPort"
+    echo "    User $Username"
+    echo "# $EndMarker"
+} >> "$SshConfigPath"
+echo "${GREEN}Configured SSH alias 'Host $SandboxName' -> 127.0.0.1:$SshPort in $SshConfigPath${RESET}"
+
+# 4. Build and launch the container stack
 echo ""
 echo "${CYAN}Building and launching container stack via Docker Compose...${RESET}"
 docker compose up -d --build
 
-# 4. Check status and output connection guide
+# 5. Check status and output connection guide
 echo ""
 echo "${CYAN}Checking container status...${RESET}"
 ContainerStatus="$(docker compose ps --format json 2>/dev/null || true)"
@@ -95,7 +128,8 @@ if [ -n "$ContainerStatus" ]; then
     echo ""
     echo "${YELLOW}Step 2: Connect to your sandbox${RESET}"
     echo "${CYAN}  A. Local Connection (from this host):${RESET}"
-    echo "${YELLOW}     ssh -p $SshPort ${Username}@localhost${RESET}"
+    echo "${YELLOW}     ssh $SandboxName${RESET}"
+    echo "       (alias added to ~/.ssh/config; same as: ssh -p $SshPort ${Username}@127.0.0.1)"
     echo ""
     echo "${CYAN}  B. Remote Connection (from any device on your Tailnet):${RESET}"
     echo "${YELLOW}     ssh ${Username}@$SandboxName${RESET}"
