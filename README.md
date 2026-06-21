@@ -1,166 +1,260 @@
 # Vibebox
 
-A containerized Linux development workspace for agent-heavy coding from a Windows host. It provides SSH access through Tailscale, persistent home-directory storage, common coding tools, and sandbox-scoped backup/restore.
+A containerized Linux dev workspace for running AI coding agents from a Windows host. You get a persistent, SSH-accessible environment with Claude Code, Codex, and the full toolchain pre-installed — accessible locally and from anywhere on your tailnet.
 
-This is optimized for convenience with some guardrails. It is not a high-security isolation boundary because the user still has passwordless sudo inside the container.
+> This is optimized for convenience, not isolation. The user has passwordless `sudo` inside the container.
 
-## What Is Included
+## What You Get
 
-- SSH key authentication with password login disabled.
-- Tailscale sidecar for remote access without opening a public port.
-- Persistent Docker volumes for `/home/<SANDBOX_USERNAME>` plus `/etc`, `/opt`, and `/usr/local` (config drift and self-installed tools survive rebuilds).
-- Scoped backups in `backups/<SANDBOX_NAME>/` covering all persisted volumes.
-- `backup` command inside the container and host scripts: `backup.ps1` / `restore.ps1` (Windows) and `backup.sh` / `restore.sh` (Linux/macOS).
-- Node.js, npm, Bun, Python, Git, GitHub CLI, Claude Code, Codex CLI, common language servers, tmux, zsh, ripgrep, fzf, jq, and common build utilities.
+### Coding tools
 
-## Base Image Choice
+| Tool | Notes |
+|---|---|
+| Claude Code | AI coding agent (Anthropic) |
+| Codex CLI | AI coding agent (OpenAI) |
+| Antigravity (`agy`) | AI coding agent (Google) |
+| Oh My Pi (`omp`) | AI coding agent (Pi) |
+| Grok CLI | AI coding agent (xAI) |
+| Node.js + npm | LTS (v22 by default) |
+| Bun | Fast JS runtime / package manager |
+| Python | System Python 3 |
+| Git + GitHub CLI | `git` and `gh` |
+| tmux | Terminal multiplexer |
+| zsh | Default shell |
+| ripgrep, fzf, jq | Search and data tools |
+| Common build utilities | `build-essential`, `curl`, `wget`, etc. |
 
-The default base image uses the current Ubuntu LTS line:
+### Language servers (for editor LSP support)
 
-```env
-BASE_IMAGE=ubuntu:24.04
-```
+| Server | Covers |
+|---|---|
+| `pyright` | Python |
+| `typescript-language-server` + `typescript` | TypeScript / JavaScript |
+| `vscode-langservers-extracted` | HTML, CSS, ESLint, JSON |
+| `yaml-language-server` | YAML |
+| `bash-language-server` | Shell scripts |
+| `tailwindcss-language-server` | Tailwind CSS |
 
-For mostly vibe-coding, web apps, scripts, CLIs, and normal project work, this is the better default than CUDA. It is smaller, faster to rebuild, and has less attack surface.
+Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — install them inside the sandbox when you need them.
 
-Use CUDA only when you actually need CUDA runtime libraries inside the container:
+### Infrastructure
 
-```env
-# Pin a specific CUDA patch tag rather than :latest for reproducible rebuilds.
-BASE_IMAGE=nvidia/cuda:13.3.0-cudnn-runtime-ubuntu24.04
-```
+- SSH key authentication, password login disabled
+- Tailscale sidecar for remote access without opening a public port
+- Persistent Docker volumes for your home directory, `/etc`, `/opt`, `/usr/local` — your files and config survive rebuilds
+- `backup` / `restore` commands (inside container and host scripts)
+- `onboard` command for first-time setup: GitHub CLI auth, git identity, dotfiles
 
-If you use the CUDA base and need GPU passthrough, start with the GPU override:
+## Prerequisites
 
-```powershell
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-```
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) running on Windows
+- A [Tailscale](https://tailscale.com) account (free tier is fine)
+- An SSH keypair (`~/.ssh/id_ed25519.pub` or similar)
 
 ## Setup
 
-1. Copy `.env.example` to `.env`.
-
-2. Set a unique sandbox name if you may run more than one sandbox:
+1. Copy `.env.example` to `.env` and configure:
 
    ```env
    SANDBOX_NAME=vibebox
    SANDBOX_USERNAME=dev
    SSH_PORT=22
+   TS_AUTHKEY=tskey-auth-...   # see step 2
    ```
 
-   Use a different `SANDBOX_NAME` and `SSH_PORT` for each sandbox. Also set
-   `TS_AUTHKEY` (see step 5 and `.env.example`) so Tailscale logs in automatically.
+   If you plan to run multiple sandboxes, use a different `SANDBOX_NAME` and `SSH_PORT` for each.
 
-3. Create `authorized_keys` from the example and add your public SSH key:
+2. Get a Tailscale auth key from <https://login.tailscale.com/admin/settings/keys>.
+
+   Choose **reusable + ephemeral**. Reusable lets the container authenticate on every restart without generating a new key. Ephemeral auto-removes the node from your tailnet when it goes offline, so you don't accumulate stale entries.
+
+   Set this as `TS_AUTHKEY` in `.env`. Without it, the Tailscale sidecar has nothing to log in with, exits, and gets restarted every minute — which also breaks local SSH.
+
+3. Add your SSH public key to `authorized_keys`:
 
    ```powershell
    Copy-Item authorized_keys.example authorized_keys
    notepad authorized_keys
    ```
 
-   `authorized_keys` is intentionally ignored by Git (and `.dockerignore`d). It is local machine identity/config, not project source.
-
-   The file is bind-mounted **read-only** into the container at `/home/<SANDBOX_USERNAME>/.ssh/authorized_keys`. Because it is a live bind mount, editing `authorized_keys` on the host takes effect on the **next SSH connection** with no restart or rebuild — `sshd` re-reads it on each authentication. Add one public key per line for multiple keys. The mount is read-only on purpose: the host file is the single source of truth, so keys cannot be added from inside the container.
+   Add one public key per line. This file is bind-mounted read-only into the container — edits take effect on the next SSH connection with no restart needed.
 
 4. Build and start:
 
    ```powershell
-   # Windows host
+   # Windows
    .\setup-sandbox.ps1
    ```
 
    ```bash
-   # Linux/macOS host (make the scripts executable once after checkout)
+   # Linux/macOS
    chmod +x setup-sandbox.sh backup.sh restore.sh
    ./setup-sandbox.sh
    ```
 
-5. Authenticate Tailscale.
+## Connecting
 
-   Recommended: set `TS_AUTHKEY` in `.env` to a **reusable + ephemeral** auth key
-   from <https://login.tailscale.com/admin/settings/keys>, and the node logs in
-   automatically on startup. Without an auth key the tailscale container has
-   nothing to log in with, exits, and gets restarted every ~minute — which also
-   breaks local SSH — so an auth key is strongly recommended. An *ephemeral* key
-   additionally keeps your tailnet tidy: a stale node auto-removes when it goes
-   offline, so you don't accumulate `<SANDBOX_NAME>-1`, `<SANDBOX_NAME>-2`, ...
+**From the Docker host (local):**
 
-   To authenticate interactively instead, leave `TS_AUTHKEY` blank and open the
-   login URL printed in the container logs:
+```powershell
+ssh -p <SSH_PORT> <SANDBOX_USERNAME>@127.0.0.1
+```
 
-   ```powershell
-   docker logs <SANDBOX_NAME>-tailscale
-   ```
+Use `127.0.0.1`, not `localhost` — on Windows, `localhost` resolves to IPv6 (`::1`) first, which fails. The setup script also writes an `~/.ssh/config` alias so you can just run:
 
-6. Connect locally (from the Docker host):
+```powershell
+ssh <SANDBOX_NAME>
+```
 
-   ```powershell
-   ssh -p <SSH_PORT> <SANDBOX_USERNAME>@127.0.0.1
-   ```
+**From any other device on your tailnet:**
 
-   Use `127.0.0.1`, **not** `localhost`: the port is published IPv4-only, and on
-   Windows `localhost` resolves to IPv6 (`::1`) first, which fails with
-   "Connection refused". The setup scripts also write an `~/.ssh/config` alias on
-   the host, so you can just run `ssh <SANDBOX_NAME>`.
+```bash
+ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>
+```
 
-   Connect remotely from any other device on your tailnet:
+Do not pass `-p <SSH_PORT>` for remote connections. That port only remaps host-local access; over Tailscale, the container's sshd is always on port 22.
 
-   ```bash
-   ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>
-   ```
+## First-Time Setup
 
-   The tailnet connection always uses SSH port **22** — do **not** pass
-   `-p <SSH_PORT>`. `SSH_PORT` only remaps the host-local port on the Docker host
-   (`127.0.0.1:<SSH_PORT> -> 22`); it has no effect over the tailnet, where
-   Tailscale routes the node's port 22 to the container's sshd.
+After your first SSH login, run:
 
-## Persistence And State
+```bash
+onboard
+```
 
-The dividing line for what survives is the persisted volumes versus the rest of the OS layer.
+This one-time script personalizes the sandbox. It is idempotent — safe to re-run at any time.
 
-**Survives `docker compose down` / `up`, and even `--build` rebuilds:**
+**What it does:**
 
-- `/home/<SANDBOX_USERNAME>` — all your files, settings, and shell history. Stored in the `<SANDBOX_NAME>-home` named volume.
-- `/etc`, `/opt`, and `/usr/local` — persisted in the `<SANDBOX_NAME>-etc`, `<SANDBOX_NAME>-opt`, and `<SANDBOX_NAME>-usr-local` named volumes. This captures config drift (e.g. edits under `/etc`), self-installed tools dropped in `/usr/local/bin`, and keeps SSH host keys (`/etc/ssh/ssh_host_*`) stable across rebuilds so you do not get host-key-changed warnings.
-- Tailscale auth/identity — stored in the `<SANDBOX_NAME>-tailscale-state` named volume, so you do not re-authenticate after a rebuild.
-- `authorized_keys` and `backups/` — these live on the host as bind mounts, so they are outside the container lifecycle entirely.
+1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
+2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
+3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
+
+### Setting up dotfiles from your main machine
+
+Run `dotfiles-init.sh` once on the machine whose config you want to use as the source of truth:
+
+```bash
+chmod +x dotfiles-init.sh
+./dotfiles-init.sh
+```
+
+The script will authenticate with GitHub CLI, create or clone your `dotfiles` repo, show an interactive checklist of supported files, move selected files into `~/.dotfiles/`, symlink them back to their original locations, then commit and push. Any Vibebox running `onboard` will clone the same repo and mirror the same symlinks.
+
+### Supported dotfiles
+
+The repo mirrors your home directory exactly. The `onboard` script links these files if present:
+
+**Shell & editor**
+
+| File | Purpose |
+|---|---|
+| `.zshrc` | Zsh config — aliases, prompt, plugins, `$PATH` additions |
+| `.bashrc` | Bash config |
+| `.gitconfig` | Git aliases, diff settings, default branch |
+| `.tmux.conf` | tmux key bindings and appearance |
+| `.vimrc` | Vim settings |
+| `.nanorc` | Nano syntax highlighting |
+| `.editorconfig` | Editor-agnostic indent/charset rules |
+| `.curlrc` | Default curl flags |
+| `.wgetrc` | Default wget flags |
+
+**Claude Code**
+
+| File | Purpose |
+|---|---|
+| `.claude/settings.json` | User-level Claude Code settings |
+| `.claude/CLAUDE.md` | Global instructions for all projects |
+| `.claude/commands/` _(dir)_ | Custom slash commands |
+
+**Codex**
+
+| File | Purpose |
+|---|---|
+| `.codex/` _(dir)_ | Full Codex config directory |
+
+**Antigravity (`agy`)**
+
+| File | Purpose |
+|---|---|
+| `.gemini/antigravity-cli/settings.json` | Antigravity settings |
+| `.gemini/antigravity-cli/keybindings.json` | Custom keybindings |
+| `.gemini/antigravity-cli/mcp_config.json` | Global MCP config |
+| `.gemini/antigravity-cli/skills/` _(dir)_ | Agent skills |
+
+**Oh My Pi (`omp`)**
+
+| File | Purpose |
+|---|---|
+| `.omp/agent/config.yml` | Main user config |
+| `.omp/agent/mcp.json` | MCP config |
+| `.omp/agent/models.yml` | Model preferences |
+
+**Grok CLI**
+
+| File | Purpose |
+|---|---|
+| `.config/grok/` _(dir)_ | Grok CLI config directory |
+
+Only files that exist in your repo are linked — the rest are left alone.
+
+**Cross-platform tip:** guard macOS- or Linux-specific config behind an OS check so the same dotfiles work everywhere:
+
+```sh
+if [[ "$(uname)" == "Darwin" ]]; then
+  # macOS-only
+fi
+```
+
+---
+
+## Reference
+
+### Persistence and State
+
+The boundary is persisted volumes versus the container's writable OS layer.
+
+**Survives `docker compose down` / `up` and `--build` rebuilds:**
+
+- `/home/<SANDBOX_USERNAME>` — all your files, settings, shell history (`<SANDBOX_NAME>-home` volume)
+- `/etc`, `/opt`, `/usr/local` — config drift, self-installed tools, and SSH host keys (`<SANDBOX_NAME>-etc`, `-opt`, `-usr-local` volumes)
+- Tailscale auth/identity (`<SANDBOX_NAME>-tailscale-state` volume)
+- `authorized_keys` and `backups/` — live on the host as bind mounts, outside the container lifecycle entirely
 
 **Does NOT survive `docker compose down` / `up`:**
 
-- Anything outside the persisted paths above: most notably system packages, which install into `/usr` (apt) — `/usr/lib`, `/usr/bin`, and npm globals under `/usr/lib/node_modules` are **not** persisted. They live in the container's writable layer, which is destroyed when `down` removes the container. `up` then creates a fresh container from the image, resetting that layer to whatever the Dockerfile baked in.
+- Anything outside the above: system packages installed via `apt` go into `/usr/lib` and `/usr/bin`, which are not persisted. The in-container `update` command upgrades packages, but they reset on the next `down`/`up`. To make a system package permanent, add it to the Dockerfile.
 
-Practical consequence: the in-container `update` command upgrades apt and npm packages, but those land in `/usr` and are lost on a `down`/`up` cycle. To make a system package permanent, add it to the Dockerfile (the system layer is intentionally rebuildable from the image). `/usr` is deliberately not persisted because it is multiple GB of image-reproducible content; persisting it would bloat volumes and every backup by gigabytes.
+**Rebuild-shadow caveat:** named volumes are seeded from the image only when first created (while empty). Later Dockerfile changes to `/etc`, `/opt`, or `/usr/local` are shadowed by the existing volume. To force a persisted folder back to image defaults:
 
-**Rebuild-shadow caveat for persisted system folders:** because a named volume is seeded from the image only when it is first created (while empty), later image changes to `/etc`, `/opt`, or `/usr/local` are **shadowed** by the existing volume and will not take effect until the volume is recreated. Concretely:
+```powershell
+docker volume rm <SANDBOX_NAME>-etc
+docker compose up -d
+```
 
-- Changing `SANDBOX_USERNAME` after the `/etc` volume exists will not rewrite `/etc/passwd`; the old user entry persists. Recreate the `-etc` volume (or start from a fresh `SANDBOX_NAME`) when changing the username.
-- Dockerfile changes to `sshd_config` or to the baked-in `/usr/local/bin` tools (`agy`, `herdr`, `omp`) will not reach an existing sandbox until you recreate the relevant volume.
+Changing `SANDBOX_USERNAME` after the `/etc` volume exists will not rewrite `/etc/passwd`. Start from a fresh `SANDBOX_NAME` or recreate the `-etc` volume when changing the username.
 
-To force a persisted system folder back to image defaults, remove its volume and bring the stack back up, for example: `docker volume rm <SANDBOX_NAME>-etc` then `docker compose up -d`.
+**Two distinctions:**
 
-Two distinctions:
+- `docker compose stop` / `start` keeps the same container — the writable layer and system changes are preserved
+- `docker compose down -v` deletes named volumes, **wiping your home directory and all persisted state** — avoid unless you intend a full reset
 
-- `docker compose stop` / `start` keeps the same container, so the writable layer and system changes are preserved. It is `down` specifically that resets the OS layer.
-- `docker compose down -v` additionally deletes the named volumes, which **wipes your home directory, the persisted `/etc`, `/opt`, `/usr/local` volumes, and Tailscale auth**. Avoid the `-v` flag unless you intend a full reset.
+### Backups and Restore
 
-After pulling these changes into an existing sandbox, run `docker compose up -d` once so the new `/etc`, `/opt`, and `/usr/local` volumes are created and seeded from the current image before you rely on backups or restore.
-
-## Backups And Restore
-
-Backups are scoped by sandbox:
+Backups are scoped by sandbox name:
 
 ```text
 backups/<SANDBOX_NAME>/<SANDBOX_NAME>-backup-YYYYMMDD-HHMMSS.tar.gz
 ```
 
-Create a backup from inside the container:
+**Create a backup** (from inside the container):
 
 ```bash
 backup
 backup before-refactor
 ```
 
-Create a backup from the host:
+**Create a backup** (from the host):
 
 ```powershell
 # Windows
@@ -174,7 +268,7 @@ Create a backup from the host:
 ./backup.sh before-refactor
 ```
 
-Restore from the host:
+**Restore** (from the host):
 
 ```powershell
 # Windows
@@ -188,13 +282,11 @@ Restore from the host:
 ./restore.sh before-refactor
 ```
 
-A backup archives your home directory plus the persisted `/etc`, `/opt`, and `/usr/local` volumes into a single root-relative `.tar.gz`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes those volumes including hidden files, extracts the selected backup back into each, then starts the workspace again. Older home-only backups (created before system folders were persisted) are detected automatically and restored into the home volume alone.
+A backup archives your home directory plus `/etc`, `/opt`, and `/usr/local` into a single `.tar.gz`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes those volumes, extracts the selected backup, then starts the workspace again. Backups older than `BACKUP_RETENTION_DAYS` (default: 7) are deleted when a new backup is created.
 
-Backups older than `BACKUP_RETENTION_DAYS` are deleted when a new backup is created. The default is 7 days.
+### Multiple Sandboxes
 
-## Multiple Sandboxes
-
-Each sandbox should have its own `.env` values:
+Give each sandbox its own `.env` values:
 
 ```env
 SANDBOX_NAME=client-a
@@ -202,7 +294,7 @@ SANDBOX_USERNAME=dev
 SSH_PORT=2222
 ```
 
-This changes container names, Docker volume names, Tailscale hostname, and backup folder. For example:
+This namespaces container names, Docker volumes, the Tailscale hostname, and the backup folder:
 
 ```text
 client-a
@@ -212,9 +304,32 @@ client-a-tailscale-state
 backups/client-a/
 ```
 
-## Resource Limits
+### Base Image
 
-The default runaway protections are:
+The default base image uses the current Ubuntu LTS:
+
+```env
+BASE_IMAGE=ubuntu:24.04
+```
+
+For most vibe-coding, web apps, scripts, and CLIs this is the better default — smaller, faster to rebuild, less attack surface.
+
+Use CUDA only when you need CUDA runtime libraries inside the container:
+
+```env
+# Pin a specific tag rather than :latest for reproducible rebuilds.
+BASE_IMAGE=nvidia/cuda:13.3.0-cudnn-runtime-ubuntu24.04
+```
+
+With the CUDA base and GPU passthrough:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+### Resource Limits
+
+Default runaway protections:
 
 ```env
 SANDBOX_MEM_LIMIT=8g
@@ -222,30 +337,9 @@ SANDBOX_CPUS=4
 SANDBOX_PIDS_LIMIT=512
 ```
 
-These are meant to stop runaway agent loops, accidental recursive process spawning, and oversized installs from taking over the host. Tune them upward for heavier builds.
+These stop runaway agent loops, accidental recursive process spawning, and oversized installs from taking over the host. Tune upward for heavier builds.
 
-## Tooling Decisions
-
-Removed by default:
-
-- Swift toolchain + `sourcekit-lsp`: removed because `sourcekit-lsp` only ships inside the full Swift toolchain, which was ~3.6 GB — roughly 39% of the image and its single largest component. Install on demand with `swiftly` if you need Swift.
-- Swift's apt prerequisites: `clang` and the dev headers `libcurl4-openssl-dev`, `libncurses-dev`, `libpython3-dev`, `libxml2-dev`, `libz3-dev` were added only to support the Swift toolchain. They are removed along with it (`clang` was the bulk; `build-essential`'s `gcc` remains for general native builds). Re-add a specific `-dev` package if a future native build needs it.
-- `vim`: `nano` remains; install `vim` yourself if you want it.
-- `net-tools`: legacy networking tools; modern images should use `iproute2` style commands.
-- `python3-dev`: only needed when compiling Python packages against CPython headers.
-- `git-lfs`: useful for ML models and large binary assets, but unnecessary for most vibe-coding.
-- CUDA base image: available as an option, not the default.
-
-Kept:
-
-- `build-essential`: worth keeping because npm and Python packages often need native compilation through `node-gyp`, `make`, `gcc`, or related build tooling.
-- `pkg-config` and `zlib1g-dev`: small, broadly useful native-build dependencies (not Swift-specific), so retained even though Swift also used them.
-
-The npm install layer also runs `npm cache clean --force` so the global CLI install does not leave a ~400 MB cache baked into the image.
-
-## Tool Versions
-
-The sandbox builds from current tool releases by default:
+### Tool Versions
 
 ```env
 NODE_MAJOR=22
@@ -261,67 +355,38 @@ BASH_LANGUAGE_SERVER_VERSION=latest
 TAILWIND_LANGUAGE_SERVER_VERSION=latest
 ```
 
-The normal sandbox toolchain path should stay on `latest`. Backups rewind the persisted volumes (home, `/etc`, `/opt`, `/usr/local`); the core toolchain (Node, npm globals, system packages) lives in `/usr`, which is not persisted, so rebuilt images still intentionally track current tools.
+### API Keys
 
-## Language Servers
+Set these in `.env` so the container picks them up automatically:
 
-Preinstalled language servers focus on common vibe-coding stacks:
+```env
+XAI_API_KEY=xai-...   # Grok CLI (xAI)
+```
 
-- Python: `pyright`
-- TypeScript/JavaScript: `typescript-language-server` plus `typescript`
-- HTML, CSS, ESLint, JSON: `vscode-langservers-extracted`
-- YAML: `yaml-language-server`
-- Bash: `bash-language-server`
-- Tailwind CSS: `tailwindcss-language-server`
+Other agents (Claude Code, Codex, Antigravity) use their own auth flows (`claude auth`, `codex login`, `gh auth`) and don't need API keys in `.env`.
 
-These are all small, Node-based servers. Heavier language servers that ship with a full toolchain — `sourcekit-lsp` (Swift), `rust-analyzer`, `gopls`, Terraform LSP, Vue, Svelte, Astro, and Angular — are not installed by default. They are worth adding when the sandbox is dedicated to those stacks, but they pull the image toward a heavier, more opinionated dev distribution. Swift in particular is excluded because `sourcekit-lsp` only ships as part of the ~3.6 GB Swift toolchain; install it on demand with `swiftly` if you need it.
+The core toolchain intentionally tracks `latest` — backups rewind the persisted volumes, but the toolchain lives in `/usr` (not persisted), so rebuilt images always pick up current tools. Pin exact versions if you need a reproducible environment.
 
-## Ignore Files
+### Security Notes
 
-`.gitignore` prevents local runtime data such as `.env` and `backups/` from being committed.
+- Backups archive your home directory plus `/etc` — which includes `/etc/shadow` and SSH host keys. Treat backup archives as private secrets.
+- Tool versions default to `latest`. Pin versions in `.env` and rebuild if you need to recreate a known-good environment.
 
-`.dockerignore` controls what gets sent to Docker during `docker build`. It keeps backup archives, logs, `.env`, and other local state out of the build context. That makes builds faster and avoids accidentally baking local secrets or old backups into an image layer.
-
-## Supply-Chain Drift
-
-Supply-chain drift means a rebuild later does not install the same software you had before. Floating tags such as `latest`, unpinned npm packages, and `curl | bash` installers can change without any change in your repo.
-
-For your use case, it matters because coding-agent CLIs are powerful: they read and write your repo, run commands, and often hold auth tokens. A bad or broken release can disrupt your workflow, leak state, or run unexpected code. This repo now chooses freshness over strict reproducibility for the default build, so keep backups private and use exact versions temporarily if you need to recreate a known-good environment.
-
-## Backup Contamination
-
-Backup contamination means your backups contain more state than you intended: shell history, CLI logs, auth metadata, cached prompts, local config, generated files, or copied keys.
-
-The value of avoiding it is practical: backups should help you rewind work, not become a pile of sensitive operational history. This project now keeps backups out of Git by default and scopes them per sandbox. The backup command skips common cache folders, but it archives your home directory plus `/etc`, `/opt`, and `/usr/local` — and `/etc` in particular includes sensitive files such as `/etc/shadow` and SSH host keys. Treat backup archives as private secrets.
-
-## Management Commands
-
-Start:
+### Management Commands
 
 ```powershell
+# Start
 docker compose up -d
-```
 
-Start with rebuild:
-
-```powershell
+# Start with rebuild
 docker compose up -d --build
-```
 
-Start CUDA/GPU mode:
-
-```powershell
+# Start in CUDA/GPU mode
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-```
 
-Stop:
-
-```powershell
+# Stop
 docker compose down
-```
 
-Check health:
-
-```powershell
+# Check health
 docker compose ps
 ```
