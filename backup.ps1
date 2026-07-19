@@ -26,9 +26,6 @@ function Get-EnvValue {
 $SandboxName = Get-EnvValue -Name "SANDBOX_NAME" -Default "vibebox"
 $Username = Get-EnvValue -Name "SANDBOX_USERNAME" -Default "dev"
 $VolumeName = "$SandboxName-home"
-$EtcVolume = "$SandboxName-etc"
-$OptVolume = "$SandboxName-opt"
-$UsrLocalVolume = "$SandboxName-usr-local"
 $RetentionDays = [int](Get-EnvValue -Name "BACKUP_RETENTION_DAYS" -Default "7")
 $BackupsDir = Join-Path $PSScriptRoot "backups\$SandboxName"
 
@@ -59,22 +56,23 @@ Write-Host "Backup File: backups\$SandboxName\$Filename" -ForegroundColor Yellow
 Write-Host "Retention:   $RetentionDays days" -ForegroundColor Yellow
 
 try {
-    # Mount each persisted volume at its real path under a staging root (/s) so the
-    # archive is root-relative (home/<user>/..., etc/..., opt/..., usr/local/...) and
-    # matches the in-container `backup` command. restore.ps1 distributes it back.
+    # Mount the home volume at its real path under a staging root (/stage) so the
+    # archive is root-relative (home/<user>/...) and matches the in-container
+    # `backup` command. restore.ps1 extracts it back. .vibebox holds root-owned SSH
+    # host keys the volume already persists, so it is excluded.
     docker run --rm `
         -v "${VolumeName}:/stage/home/${Username}:ro" `
-        -v "${EtcVolume}:/stage/etc:ro" `
-        -v "${OptVolume}:/stage/opt:ro" `
-        -v "${UsrLocalVolume}:/stage/usr/local:ro" `
         -v "${BackupsDir}:/backup" `
-        alpine tar czf "/backup/$Filename" -C /stage "home/${Username}" etc opt usr/local
+        alpine tar czf "/backup/$Filename" --exclude="home/${Username}/.vibebox" -C /stage "home/${Username}"
 
     if (-not (Test-Path $BackupPath)) {
         throw "Backup file was not created successfully."
     }
 
+    # Prune only timestamped backups (-backup-YYYYMMDD-HHMMSS.tar.gz), so labeled
+    # safety snapshots (before-refactor, pre-restore, auto-before-update) are kept.
     Get-ChildItem -Path $BackupsDir -Filter "$SandboxName-backup-*.tar.gz" |
+        Where-Object { $_.Name -match '-backup-\d{8}-\d{6}\.tar\.gz$' } |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$RetentionDays) } |
         Remove-Item -Force
 

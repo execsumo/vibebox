@@ -13,7 +13,7 @@ A containerized Linux dev workspace for running AI coding agents from a Windows 
 | Claude Code | AI coding agent (Anthropic) |
 | Codex CLI | AI coding agent (OpenAI) |
 | Antigravity (`agy`) | AI coding agent (Google) |
-| Oh My Pi (`omp`) | AI coding agent (Pi) |
+| Herdr | AI coding agent (Herdr) |
 | Grok CLI | AI coding agent (xAI) |
 | Node.js + npm | LTS (v22 by default) |
 | Bun | Fast JS runtime / package manager |
@@ -41,7 +41,7 @@ Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — insta
 
 - SSH key authentication, password login disabled
 - Tailscale sidecar for remote access without opening a public port
-- Persistent Docker volumes for your home directory, `/etc`, `/opt`, `/usr/local` — your files and config survive rebuilds
+- A single persistent Docker volume for your home directory — your files, config, and SSH host identity survive rebuilds; everything else comes from the image
 - `backup` / `restore` commands (inside container and host scripts)
 - `onboard` command for first-time setup: GitHub CLI auth, git identity, dotfiles
 
@@ -67,6 +67,8 @@ Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — insta
 2. Get a Tailscale auth key from <https://login.tailscale.com/admin/settings/keys>.
 
    Choose **reusable + ephemeral**. Reusable lets the container authenticate on every restart without generating a new key. Ephemeral auto-removes the node from your tailnet when it goes offline, so you don't accumulate stale entries.
+
+   Also make it a **tagged** key (select `tag:vibebox` when creating it). First add a matching `tagOwners` entry to your tailnet ACLs (e.g. `"tag:vibebox": ["your-user@"]`). The sandbox then comes up tagged automatically, so tailnet ACLs can limit what it reaches — a meaningful blast-radius reduction for a box with passwordless `sudo`.
 
    Set this as `TS_AUTHKEY` in `.env`. Without it, the Tailscale sidecar has nothing to log in with, exits, and gets restarted every minute — which also breaks local SSH.
 
@@ -182,13 +184,11 @@ The repo mirrors your home directory exactly. The `onboard` script links these f
 | `.gemini/antigravity-cli/mcp_config.json` | Global MCP config |
 | `.gemini/antigravity-cli/skills/` _(dir)_ | Agent skills |
 
-**Oh My Pi (`omp`)**
+**Herdr**
 
 | File | Purpose |
 |---|---|
-| `.omp/agent/config.yml` | Main user config |
-| `.omp/agent/mcp.json` | MCP config |
-| `.omp/agent/models.yml` | Model preferences |
+| `.config/herdr/` _(dir)_ | Herdr config directory |
 
 **Grok CLI**
 
@@ -210,33 +210,40 @@ fi
 
 ## Reference
 
+### Working From Any Device
+
+This is the payoff of the whole design: the same live workspace from your laptop, another
+machine, or your phone.
+
+1. Install the **Tailscale** app and an SSH client (**Termius** or **Blink** on iOS/Android;
+   any terminal elsewhere) and sign in to the same tailnet.
+2. `ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>` — no port flag needed over Tailscale.
+3. Run `launch` to attach the persistent **Herdr** workspace.
+
+Herdr is a client–server multiplexer: closing the client (or losing your connection) leaves
+the Herdr server running with your agents still working. Reconnect from any device, run
+`launch`, and you are back where you left off — no manual detach required.
+
+**Restart boundary.** A `docker compose down` / `up` stops the Herdr server itself. On the
+next `launch`, Herdr restores supported agents' **conversations** (`resume_agents_on_restore`,
+on by default), but **running processes** — dev servers, test watchers — do not come back.
+`stop` / `start` keeps the same container and avoids this entirely.
+
 ### Persistence and State
 
-The boundary is persisted volumes versus the container's writable OS layer.
+**What survives a rebuild is your home directory.** That is the whole model:
 
-**Survives `docker compose down` / `up` and `--build` rebuilds:**
-
-- `/home/<SANDBOX_USERNAME>` — all your files, settings, shell history (`<SANDBOX_NAME>-home` volume)
-- `/etc`, `/opt`, `/usr/local` — config drift, self-installed tools, and SSH host keys (`<SANDBOX_NAME>-etc`, `-opt`, `-usr-local` volumes)
+- `/home/<SANDBOX_USERNAME>` — all your files, settings, shell history, and the sandbox's SSH host identity (under `~/.vibebox/ssh`), in the `<SANDBOX_NAME>-home` volume
 - Tailscale auth/identity (`<SANDBOX_NAME>-tailscale-state` volume)
-- `authorized_keys` and `backups/` — live on the host as bind mounts, outside the container lifecycle entirely
+- `authorized_keys` and `backups/` live on the host as bind mounts, outside the container lifecycle entirely
 
-**Does NOT survive `docker compose down` / `up`:**
+Everything else comes from the image and is disposable. Anything you install with `apt` or `sudo cp` works for the life of the container but is **not** persisted — to make a tool or package durable, add it to the Dockerfile and rebuild. The in-container `update` command upgrades tools in place, but those changes reset on the next `down`/`up`; treat `docker compose up -d --build` as the durable update path.
 
-- Anything outside the above: system packages installed via `apt` go into `/usr/lib` and `/usr/bin`, which are not persisted. The in-container `update` command upgrades packages, but they reset on the next `down`/`up`. To make a system package permanent, add it to the Dockerfile.
+SSH host keys are generated once on first boot into the home volume, so rebuilds keep the same identity — no "host key changed" warnings. (A `restore` regenerates them, so expect one host-key prompt after a deliberate rewind.)
 
-**Rebuild-shadow caveat:** named volumes are seeded from the image only when first created (while empty). Later Dockerfile changes to `/etc`, `/opt`, or `/usr/local` are shadowed by the existing volume. To force a persisted folder back to image defaults:
+**Two distinctions worth knowing:**
 
-```powershell
-docker volume rm <SANDBOX_NAME>-etc
-docker compose up -d
-```
-
-Changing `SANDBOX_USERNAME` after the `/etc` volume exists will not rewrite `/etc/passwd`. Start from a fresh `SANDBOX_NAME` or recreate the `-etc` volume when changing the username.
-
-**Two distinctions:**
-
-- `docker compose stop` / `start` keeps the same container — the writable layer and system changes are preserved
+- `docker compose stop` / `start` keeps the same container — the writable layer is preserved
 - `docker compose down -v` deletes named volumes, **wiping your home directory and all persisted state** — avoid unless you intend a full reset
 
 ### Backups and Restore
@@ -282,7 +289,7 @@ backup before-refactor
 ./restore.sh before-refactor
 ```
 
-A backup archives your home directory plus `/etc`, `/opt`, and `/usr/local` into a single `.tar.gz`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes those volumes, extracts the selected backup, then starts the workspace again. Backups older than `BACKUP_RETENTION_DAYS` (default: 7) are deleted when a new backup is created.
+A backup archives your home directory into a single `.tar.gz` (SSH host keys under `~/.vibebox` are excluded — the home volume already persists them). Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home volume, extracts the selected backup, then starts the workspace again. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`, `auto-before-update`) are kept until you delete them.
 
 ### Multiple Sandboxes
 
@@ -334,10 +341,10 @@ Default runaway protections:
 ```env
 SANDBOX_MEM_LIMIT=8g
 SANDBOX_CPUS=4
-SANDBOX_PIDS_LIMIT=512
+SANDBOX_PIDS_LIMIT=1024
 ```
 
-These stop runaway agent loops, accidental recursive process spawning, and oversized installs from taking over the host. Tune upward for heavier builds.
+These stop runaway agent loops, accidental recursive process spawning, and oversized installs from taking over the host. `1024` is a safe runaway guard that still leaves headroom for large builds — linkers, `jest`, and `cargo` spawn many short-lived processes. If you ever hit mysterious "Resource temporarily unavailable" errors during a heavy build, this limit is the first thing to raise.
 
 ### Tool Versions
 
@@ -369,7 +376,8 @@ The core toolchain intentionally tracks `latest` — backups rewind the persiste
 
 ### Security Notes
 
-- Backups archive your home directory plus `/etc` — which includes `/etc/shadow` and SSH host keys. Treat backup archives as private secrets.
+- Backups archive your home directory only — no longer `/etc/shadow` or system secrets. They still contain whatever lives under `$HOME`: `gh`/Claude/Codex auth tokens, shell history, and any private keys you keep there. Treat backup archives as private secrets.
+- The sandbox runs with passwordless `sudo`. A tagged Tailscale auth key (`tag:vibebox`, see setup step 2) lets tailnet ACLs bound what a compromised sandbox can reach.
 - Tool versions default to `latest`. Pin versions in `.env` and rebuild if you need to recreate a known-good environment.
 
 ### Management Commands

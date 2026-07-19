@@ -137,7 +137,7 @@ if [ -n "$ContainerStatus" ]; then
     echo "${YELLOW}Step 3: Launch your Workspace${RESET}"
     echo "${CYAN}  Once logged into the SSH session, run the ultimate workspace launcher:${RESET}"
     echo "${YELLOW}     launch${RESET}"
-    echo "${CYAN}  This places you in a persistent tmux session running herdr.${RESET}"
+    echo "${CYAN}  This places you in a persistent Herdr workspace.${RESET}"
 else
     echo "${RED}Failed to start the container. Please verify Docker is running.${RESET}"
 fi

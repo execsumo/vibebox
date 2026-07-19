@@ -47,9 +47,6 @@ function Resolve-BackupName {
 $SandboxName = Get-EnvValue -Name "SANDBOX_NAME" -Default "vibebox"
 $Username = Get-EnvValue -Name "SANDBOX_USERNAME" -Default "dev"
 $VolumeName = "$SandboxName-home"
-$EtcVolume = "$SandboxName-etc"
-$OptVolume = "$SandboxName-opt"
-$UsrLocalVolume = "$SandboxName-usr-local"
 $BackupsDir = Join-Path $PSScriptRoot "backups\$SandboxName"
 $EscapedSandboxName = [regex]::Escape($SandboxName)
 
@@ -126,8 +123,7 @@ if ($Filename -notmatch "^$EscapedSandboxName-backup-[a-zA-Z0-9_-]+\.tar\.gz$" -
 }
 
 Write-Host ""
-Write-Host "WARNING: Restoring will completely overwrite the home volume, plus the" -ForegroundColor Red
-Write-Host "         persisted /etc, /opt, and /usr/local volumes for this sandbox." -ForegroundColor Red
+Write-Host "WARNING: Restoring will completely overwrite the home volume for this sandbox." -ForegroundColor Red
 Write-Host "Target Backup: backups\$SandboxName\$Filename" -ForegroundColor Yellow
 $Confirm = Read-Host "Are you absolutely sure you want to restore? (y/N)"
 
@@ -146,37 +142,20 @@ try {
     docker compose stop sandbox
 
     Write-Host "3/4 Wiping current active files, including hidden files, and extracting backup..." -ForegroundColor Cyan
-    # Mount each volume at its real path under /s and let the archive layout drive
-    # extraction. New (root-relative) archives begin with home/...; legacy archives
-    # are home-relative and restore into the home volume only.
+    # Mount the home volume at its real path under /restore-stage, wipe it, then
+    # extract. Archives are root-relative (begin with home/<user>/...).
     $RestoreScript = @'
 set -e
 F="$1"
 U="$2"
 HOME_DIR="/restore-stage/home/$U"
-FIRST=$(tar tzf "/backup/$F" 2>/dev/null | head -n 1)
-case "$FIRST" in
-  home/*)
-    echo "Full archive detected; restoring home, /etc, /opt, /usr/local."
-    for d in "$HOME_DIR" /restore-stage/etc /restore-stage/opt /restore-stage/usr/local; do
-      find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    done
-    tar xzf "/backup/$F" -C /restore-stage
-    ;;
-  *)
-    echo "Legacy home-only archive detected; restoring home directory only."
-    find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    tar xzf "/backup/$F" -C "$HOME_DIR"
-    ;;
-esac
+find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+tar xzf "/backup/$F" -C /restore-stage
 '@
     # Strip CR so the script is valid for busybox sh regardless of file line endings.
     $RestoreScript = $RestoreScript -replace "`r", ""
     docker run --rm `
         -v "${VolumeName}:/restore-stage/home/${Username}" `
-        -v "${EtcVolume}:/restore-stage/etc" `
-        -v "${OptVolume}:/restore-stage/opt" `
-        -v "${UsrLocalVolume}:/restore-stage/usr/local" `
         -v "${BackupsDir}:/backup:ro" `
         alpine sh -c $RestoreScript sh "$Filename" "$Username"
 

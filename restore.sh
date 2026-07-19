@@ -57,9 +57,6 @@ is_valid_backup_name() {
 SandboxName="$(get_env_value SANDBOX_NAME vibebox)"
 Username="$(get_env_value SANDBOX_USERNAME dev)"
 VolumeName="$SandboxName-home"
-EtcVolume="$SandboxName-etc"
-OptVolume="$SandboxName-opt"
-UsrLocalVolume="$SandboxName-usr-local"
 BackupsDir="$SCRIPT_DIR/backups/$SandboxName"
 
 echo "${CYAN}==============================================${RESET}"
@@ -141,8 +138,7 @@ if ! is_valid_backup_name "$SandboxName" "$Filename"; then
 fi
 
 echo ""
-echo "${RED}WARNING: Restoring will completely overwrite the home volume, plus the${RESET}"
-echo "${RED}         persisted /etc, /opt, and /usr/local volumes for this sandbox.${RESET}"
+echo "${RED}WARNING: Restoring will completely overwrite the home volume for this sandbox.${RESET}"
 echo "${YELLOW}Target Backup: backups/$SandboxName/$Filename${RESET}"
 read -r -p "Are you absolutely sure you want to restore? (y/N): " Confirm
 
@@ -152,29 +148,15 @@ if [ "$Confirm" != "y" ] && [ "$Confirm" != "yes" ]; then
     exit 0
 fi
 
-# Mount each volume at its real path under /restore-stage and let the archive layout
-# drive extraction. New (root-relative) archives begin with home/...; legacy archives
-# are home-relative and restore into the home volume only.
+# Mount the home volume at its real path under /restore-stage, wipe it, then extract.
+# Archives are root-relative (begin with home/<user>/...).
 read -r -d '' RESTORE_SCRIPT <<'EOF' || true
 set -e
 F="$1"
 U="$2"
 HOME_DIR="/restore-stage/home/$U"
-FIRST=$(tar tzf "/backup/$F" 2>/dev/null | head -n 1)
-case "$FIRST" in
-  home/*)
-    echo "Full archive detected; restoring home, /etc, /opt, /usr/local."
-    for d in "$HOME_DIR" /restore-stage/etc /restore-stage/opt /restore-stage/usr/local; do
-      find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    done
-    tar xzf "/backup/$F" -C /restore-stage
-    ;;
-  *)
-    echo "Legacy home-only archive detected; restoring home directory only."
-    find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    tar xzf "/backup/$F" -C "$HOME_DIR"
-    ;;
-esac
+find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+tar xzf "/backup/$F" -C /restore-stage
 EOF
 
 restart_container() {
@@ -199,9 +181,6 @@ fi
 echo "${CYAN}3/4 Wiping current active files, including hidden files, and extracting backup...${RESET}"
 if docker run --rm \
     -v "${VolumeName}:/restore-stage/home/${Username}" \
-    -v "${EtcVolume}:/restore-stage/etc" \
-    -v "${OptVolume}:/restore-stage/opt" \
-    -v "${UsrLocalVolume}:/restore-stage/usr/local" \
     -v "${BackupsDir}:/backup:ro" \
     alpine sh -c "$RESTORE_SCRIPT" sh "$Filename" "$Username"; then
 

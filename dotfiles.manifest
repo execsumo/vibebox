@@ -1,0 +1,38 @@
+# Single source of truth for supported dotfiles.
+# Consumed by dotfiles-init.sh (host) and the onboard script (container).
+# Format:  type|relpath|label
+#   type    = file | dir   (dirs are symlinked whole; files individually)
+#   relpath = path relative to $HOME (repo mirrors $HOME exactly)
+#   label   = human-readable description shown in the dotfiles-init checklist
+# Blank lines and lines starting with '#' are ignored.
+
+# Shell & editor
+file|.zshrc|Zsh config (.zshrc)
+file|.bashrc|Bash config (.bashrc)
+file|.gitconfig|Git config (.gitconfig)
+file|.tmux.conf|tmux config (.tmux.conf)
+file|.vimrc|Vim config (.vimrc)
+file|.nanorc|Nano config (.nanorc)
+file|.editorconfig|EditorConfig (.editorconfig)
+file|.curlrc|curl config (.curlrc)
+file|.wgetrc|wget config (.wgetrc)
+
+# Claude Code
+file|.claude/settings.json|Claude Code settings (.claude/settings.json)
+file|.claude/CLAUDE.md|Claude Code global CLAUDE.md (.claude/CLAUDE.md)
+dir|.claude/commands|Claude Code commands (.claude/commands/)
+
+# Codex
+dir|.codex|Codex config dir (.codex/)
+
+# Antigravity (agy)
+file|.gemini/antigravity-cli/settings.json|Antigravity settings (.gemini/antigravity-cli/settings.json)
+file|.gemini/antigravity-cli/keybindings.json|Antigravity keybindings (.gemini/antigravity-cli/keybindings.json)
+file|.gemini/antigravity-cli/mcp_config.json|Antigravity MCP config (.gemini/antigravity-cli/mcp_config.json)
+dir|.gemini/antigravity-cli/skills|Antigravity skills (.gemini/antigravity-cli/skills/)
+
+# Herdr
+dir|.config/herdr|Herdr config dir (.config/herdr/)
+
+# Grok CLI
+dir|.config/grok|Grok CLI config dir (.config/grok/)

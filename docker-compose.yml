@@ -65,15 +65,12 @@ services:
     volumes:
       # Mount the public SSH keys as read-only from the host into the user's home folder
       - ./authorized_keys:/home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys:ro
-      # Persist the user's home directory so settings and user files survive rebuilds
+      # Persist the user's home directory so settings and user files survive rebuilds.
+      # This is the ONLY persisted pet: SSH host keys live under $HOME/.vibebox/ssh
+      # (generated once by the entrypoint), so the sandbox keeps a stable identity
+      # without persisting /etc, /opt, or /usr/local. Everything durable belongs in
+      # the Dockerfile; a rebuild is the way to change the rest.
       - sandbox_home:/home/${SANDBOX_USERNAME:-dev}
-      # Persist common system folders that accumulate real config drift over time.
-      # Each is seeded from the image on first creation, then survives down/up.
-      # Trade-off: once seeded, later image changes to these paths are shadowed by
-      # the volume until it is recreated (see README "Persistence And State").
-      - sandbox_etc:/etc
-      - sandbox_opt:/opt
-      - sandbox_usr_local:/usr/local
       # Mount the host backups folder to /backups inside the container so internal backups write directly to the backups folder
       - ./backups/${SANDBOX_NAME:-vibebox}:/backups
     healthcheck:
@@ -84,20 +81,13 @@ services:
       start_period: 20s
     mem_limit: ${SANDBOX_MEM_LIMIT:-8g}
     cpus: ${SANDBOX_CPUS:-4}
-    pids_limit: ${SANDBOX_PIDS_LIMIT:-512}
+    pids_limit: ${SANDBOX_PIDS_LIMIT:-1024}
     restart: unless-stopped
 
 volumes:
-  # Named volume for persistent user home directory data
+  # Named volume for persistent user home directory data (the only persisted pet).
   sandbox_home:
     name: ${SANDBOX_NAME:-vibebox}-home
-  # Named volumes for persisted system folders (config drift + self-installed tools)
-  sandbox_etc:
-    name: ${SANDBOX_NAME:-vibebox}-etc
-  sandbox_opt:
-    name: ${SANDBOX_NAME:-vibebox}-opt
-  sandbox_usr_local:
-    name: ${SANDBOX_NAME:-vibebox}-usr-local
   # Named volume to persist Tailscale authentication and state between container runs
   tailscale_state:
     name: ${SANDBOX_NAME:-vibebox}-tailscale-state

@@ -1,6 +1,9 @@
 # Ensure shell scripts and container files always use LF, even when committed
 # from a Windows host with core.autocrlf enabled. CRLF would break the shebang
-# on Linux and the heredocs baked into the Dockerfile.
+# on Linux for the in-container commands copied from scripts/.
 *.sh text eol=lf
 Dockerfile text eol=lf
 *.yml text eol=lf
+# In-container commands (extensionless) and the shared dotfiles manifest.
+scripts/* text eol=lf
+dotfiles.manifest text eol=lf

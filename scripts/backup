@@ -1,0 +1,63 @@
+#!/bin/bash
+set -euo pipefail
+
+SANDBOX="${SANDBOX_NAME:-vibebox}"
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+NAME="${1:-}"
+
+if [ -z "$NAME" ]; then
+  FILENAME="${SANDBOX}-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+else
+  SANITISED=$(echo "$NAME" | tr -cd "a-zA-Z0-9_-")
+  if [ -z "$SANITISED" ]; then
+    echo "ERROR: Backup label must contain at least one letter, number, underscore, or dash."
+    exit 1
+  fi
+  FILENAME="${SANDBOX}-backup-${SANITISED}.tar.gz"
+fi
+
+mkdir -p /backups
+
+# Archive is root-relative so tar members are clean (e.g. home/dev/...).
+# HOME_REL strips the leading slash from $HOME (e.g. home/dev).
+HOME_REL="${HOME#/}"
+
+echo "=============================================="
+echo "         Creating Sandbox Backup"
+echo "=============================================="
+echo "Sandbox: $SANDBOX"
+echo "Saving $HOME to /backups/$FILENAME..."
+
+# $HOME is user-owned, so no sudo needed. --warning=no-file-changed keeps a
+# live-system race (exit 1) from aborting the script; exit >1 is fatal.
+# .vibebox holds root-owned SSH host keys (not readable here and persisted by the
+# home volume anyway), so it is excluded.
+set +e
+tar \
+  --warning=no-file-changed \
+  --exclude="$HOME_REL/.cache" \
+  --exclude="$HOME_REL/.npm" \
+  --exclude="$HOME_REL/.local/share/Trash" \
+  --exclude="$HOME_REL/.vibebox" \
+  -czf "/backups/$FILENAME" \
+  -C / \
+  "$HOME_REL"
+RC=$?
+set -e
+if [ "$RC" -gt 1 ]; then
+  echo "ERROR: tar failed with exit code $RC."
+  exit "$RC"
+fi
+
+# Prune only timestamped backups (-backup-YYYYMMDD-HHMMSS.tar.gz), so labeled
+# safety snapshots (before-refactor, pre-restore, auto-before-update) are kept.
+TS='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+find /backups -maxdepth 1 -type f \
+  -name "${SANDBOX}-backup-${TS}.tar.gz" \
+  -mtime +"$RETENTION_DAYS" -delete
+
+SIZE=$(du -h "/backups/$FILENAME" | cut -f1)
+echo "Backup created successfully."
+echo "File Size: $SIZE"
+echo "Retention: deleted timestamped ${SANDBOX} backups older than ${RETENTION_DAYS} days."
+echo "=============================================="

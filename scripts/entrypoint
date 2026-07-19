@@ -1,0 +1,16 @@
+#!/bin/bash
+# Container entrypoint. Generates SSH host keys once into the persisted home
+# volume so the sandbox keeps a stable identity across rebuilds (no
+# "host key changed" warnings), then hands off to the given command (sshd).
+set -e
+
+# Resolve the sandbox user's home (UID 1000) regardless of the configured username.
+KEYDIR="$(getent passwd 1000 | cut -d: -f6)/.vibebox/ssh"
+mkdir -p "$KEYDIR"
+
+# Runs as root, so the generated private keys are root-owned mode 600 — the
+# standard, always-accepted case for sshd HostKey files.
+[ -f "$KEYDIR/ssh_host_ed25519_key" ] || ssh-keygen -q -t ed25519 -f "$KEYDIR/ssh_host_ed25519_key" -N ""
+[ -f "$KEYDIR/ssh_host_rsa_key" ]     || ssh-keygen -q -t rsa -b 4096 -f "$KEYDIR/ssh_host_rsa_key" -N ""
+
+exec "$@"

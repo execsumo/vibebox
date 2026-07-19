@@ -125,7 +125,7 @@ if ($ContainerStatus) {
     Write-Host "Step 3: Launch your Workspace" -ForegroundColor Yellow
     Write-Host "  Once logged into the SSH session, run the ultimate workspace launcher:" -ForegroundColor Cyan
     Write-Host "     launch" -ForegroundColor Yellow
-    Write-Host "  This places you in a persistent tmux session running herdr." -ForegroundColor Cyan
+    Write-Host "  This places you in a persistent Herdr workspace." -ForegroundColor Cyan
 } else {
     Write-Host "Failed to start the container. Please verify Docker Desktop is running." -ForegroundColor Red
 }

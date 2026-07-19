@@ -33,9 +33,6 @@ get_env_value() {
 SandboxName="$(get_env_value SANDBOX_NAME vibebox)"
 Username="$(get_env_value SANDBOX_USERNAME dev)"
 VolumeName="$SandboxName-home"
-EtcVolume="$SandboxName-etc"
-OptVolume="$SandboxName-opt"
-UsrLocalVolume="$SandboxName-usr-local"
 RetentionDays="$(get_env_value BACKUP_RETENTION_DAYS 7)"
 BackupsDir="$SCRIPT_DIR/backups/$SandboxName"
 
@@ -64,16 +61,14 @@ echo "${YELLOW}Volume:      $VolumeName${RESET}"
 echo "${YELLOW}Backup File: backups/$SandboxName/$Filename${RESET}"
 echo "${YELLOW}Retention:   $RetentionDays days${RESET}"
 
-# Mount each persisted volume at its real path under a staging root (/stage) so the
-# archive is root-relative (home/<user>/..., etc/..., opt/..., usr/local/...) and
-# matches the in-container `backup` command. restore.sh distributes it back.
+# Mount the home volume at its real path under a staging root (/stage) so the
+# archive is root-relative (home/<user>/...) and matches the in-container `backup`
+# command. restore.sh extracts it back. .vibebox holds root-owned SSH host keys the
+# volume already persists, so it is excluded.
 if docker run --rm \
     -v "${VolumeName}:/stage/home/${Username}:ro" \
-    -v "${EtcVolume}:/stage/etc:ro" \
-    -v "${OptVolume}:/stage/opt:ro" \
-    -v "${UsrLocalVolume}:/stage/usr/local:ro" \
     -v "${BackupsDir}:/backup" \
-    alpine tar czf "/backup/$Filename" -C /stage "home/${Username}" etc opt usr/local; then
+    alpine tar czf "/backup/$Filename" --exclude="home/${Username}/.vibebox" -C /stage "home/${Username}"; then
 
     if [ ! -f "$BackupPath" ]; then
         echo ""
@@ -82,8 +77,13 @@ if docker run --rm \
         exit 1
     fi
 
-    # Prune backups older than the retention window.
-    find "$BackupsDir" -maxdepth 1 -type f -name "$SandboxName-backup-*.tar.gz" \
+    # Prune only timestamped backups (-backup-YYYYMMDD-HHMMSS.tar.gz), so labeled
+    # safety snapshots (before-refactor, pre-restore, auto-before-update) are kept.
+    # The timestamp is matched with a portable glob (GNU find lacks BSD/macOS
+    # -regextype), so this works on Linux and macOS hosts alike.
+    ts='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+    find "$BackupsDir" -maxdepth 1 -type f \
+        -name "$SandboxName-backup-$ts.tar.gz" \
         -mtime "+$RetentionDays" -delete
 
     SizeBytes="$(stat -c %s "$BackupPath" 2>/dev/null || stat -f %z "$BackupPath")"

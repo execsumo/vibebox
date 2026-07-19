@@ -8,14 +8,16 @@ This document explains where each piece lives and what to touch when you add a n
 
 | File | What changes |
 |---|---|
-| `Dockerfile` | Install step + update step |
+| `Dockerfile` | Install step + build verification (step 7b) |
+| `scripts/update` | Add an update step for the tool (real file, not a heredoc) |
 | `.env.example` | API key variable (if the tool needs one) |
-| `dotfiles-init.sh` | Interactive checklist entry for dotfiles |
+| `dotfiles.manifest` | One line per new dotfile path (if the tool has config) |
 | `README.md` | Coding tools table + dotfiles section + API Keys section (if needed) |
 
-The `onboard` script lives **inside** the Dockerfile (in the `RUN cat > /usr/local/bin/onboard` heredoc). Its `SUPPORTED_FILES` and `SUPPORTED_DIRS` arrays must also be updated to mirror any new dotfile paths you add to `dotfiles-init.sh`.
+The in-container commands (`onboard`, `backup`, `update`, `launch`) and the `entrypoint` are real files in `scripts/`, `COPY`'d to `/usr/local/bin` by the Dockerfile — edit them directly. Dotfile paths live in a single `dotfiles.manifest` at the repo root; both `dotfiles-init.sh` (host) and `onboard` (container) read it, so there is only one list to maintain.
 
----
+If a tool is one you depend on daily, add it to the hard-fail loop in the Dockerfile's step 7b verification (`for t in claude codex bun node gh`); optional agents go in the warn loop.
+
 
 ## Install step patterns
 
@@ -32,7 +34,7 @@ RUN npm install -g \
 ```
 
 ### Official install script
-Add a numbered step after the last tool install, before step 9 (SSH config). Copy the binary to `/usr/local/bin` so it is on `$PATH` for all users. Wrap in `(... ) || echo "..."` so a transient network failure doesn't break the whole build.
+Add a numbered step after the last tool install, before step 8 (SSH config). Copy the binary to `/usr/local/bin` so it is on `$PATH` for all users. Wrap in `(... ) || echo "..."` so a transient network failure doesn't break the whole build.
 
 ```dockerfile
 # N. Install ToolName via the official installer
@@ -48,7 +50,7 @@ Add to the existing `apt-get install -y` block (step 1).
 
 ## Update step
 
-The `update` command is a shell script written inline in the Dockerfile (`RUN echo '...' > /usr/local/bin/update`). It is step-numbered (e.g. `1/6`). When you add a tool:
+The `update` command is `scripts/update` (a normal shell script, `COPY`'d to `/usr/local/bin/update`). It is step-numbered (e.g. `1/7`). When you add a tool:
 
 1. Increment the denominator in all step labels (e.g. `6/6` → `7/7`).
 2. Add a new step at the end (before the closing summary echo).
@@ -66,12 +68,13 @@ echo "N/N Updating ToolName..."
 
 ## Dotfiles
 
-Both `dotfiles-init.sh` (runs on the source machine) and the `onboard` script inside the Dockerfile (runs inside the container) maintain parallel lists of supported dotfiles.
+Supported dotfiles live in a single `dotfiles.manifest` at the repo root. `dotfiles-init.sh` (runs on the source machine) and `onboard` (runs inside the container, reading the copy at `/usr/local/share/vibebox/dotfiles.manifest`) both parse it — **one list, no hand-syncing.**
 
-**Update both lists** when adding new config paths. Each entry format:
+**Add one line** per new config path. Format is `type|relpath|label`:
 
-- `dotfiles-init.sh` ITEMS array: `"Label (path)|rel/path|file"` or `"Label (path/)|rel/path|dir"`
-- `onboard` SUPPORTED_FILES / SUPPORTED_DIRS arrays: bare relative path strings
+- `type` = `file` (symlinked individually) or `dir` (symlinked whole)
+- `relpath` = path relative to `$HOME`
+- `label` = description shown in the `dotfiles-init.sh` checklist
 
 If the tool's config directory is unknown, add a `dir` entry for the most likely location (`~/.config/toolname/` is the XDG-standard default for modern CLIs) and note it in the README.
 
@@ -84,7 +87,7 @@ If the tool's config directory is unknown, add a `dir` entry for the most likely
 | Claude Code | npm global | `/usr/local/bin/claude` | `npm update -g` | `.claude/settings.json`, `.claude/CLAUDE.md`, `.claude/commands/` |
 | Codex CLI | npm global | `/usr/local/bin/codex` | `npm update -g` | `.codex/` |
 | Antigravity (`agy`) | install script | `/usr/local/bin/agy` | re-run installer (no update cmd) | `.gemini/antigravity-cli/` |
-| Oh My Pi (`omp`) | install script | `/usr/local/bin/omp` | re-run installer | `.omp/agent/` |
+| Herdr | install script | `/usr/local/bin/herdr` | re-run installer | `.config/herdr/` |
 | Grok CLI | install script | `/usr/local/bin/grok` | re-run installer | `.config/grok/` |
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |

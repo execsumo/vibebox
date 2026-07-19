@@ -16,37 +16,22 @@ warn() { echo -e "  ${YELLOW}!${RESET} $*"; }
 info() { echo -e "    $*"; }
 
 # ── Supported items ────────────────────────────────────────────────────────────
-# Each entry: "LABEL|PATH|type"  (type = file | dir)
-# PATH is relative to $HOME. Dirs are symlinked whole; files are symlinked individually.
-ITEMS=(
-  # Shell & editor
-  "Zsh config                  (.zshrc)|.zshrc|file"
-  "Bash config                 (.bashrc)|.bashrc|file"
-  "Git config                  (.gitconfig)|.gitconfig|file"
-  "tmux config                 (.tmux.conf)|.tmux.conf|file"
-  "Vim config                  (.vimrc)|.vimrc|file"
-  "Nano config                 (.nanorc)|.nanorc|file"
-  "EditorConfig                (.editorconfig)|.editorconfig|file"
-  "curl config                 (.curlrc)|.curlrc|file"
-  "wget config                 (.wgetrc)|.wgetrc|file"
-  # Claude Code
-  "Claude Code settings        (.claude/settings.json)|.claude/settings.json|file"
-  "Claude Code global CLAUDE.md(.claude/CLAUDE.md)|.claude/CLAUDE.md|file"
-  "Claude Code commands        (.claude/commands/)|.claude/commands|dir"
-  # Codex
-  "Codex config dir            (.codex/)|.codex|dir"
-  # Antigravity (agy)
-  "Antigravity settings        (.gemini/antigravity-cli/settings.json)|.gemini/antigravity-cli/settings.json|file"
-  "Antigravity keybindings     (.gemini/antigravity-cli/keybindings.json)|.gemini/antigravity-cli/keybindings.json|file"
-  "Antigravity MCP config      (.gemini/antigravity-cli/mcp_config.json)|.gemini/antigravity-cli/mcp_config.json|file"
-  "Antigravity skills          (.gemini/antigravity-cli/skills/)|.gemini/antigravity-cli/skills|dir"
-  # Oh My Pi (omp)
-  "Oh My Pi config             (.omp/agent/config.yml)|.omp/agent/config.yml|file"
-  "Oh My Pi MCP config         (.omp/agent/mcp.json)|.omp/agent/mcp.json|file"
-  "Oh My Pi models             (.omp/agent/models.yml)|.omp/agent/models.yml|file"
-  # Grok CLI
-  "Grok CLI config dir         (.config/grok/)|.config/grok|dir"
-)
+# The supported dotfiles come from the shared manifest (dotfiles.manifest), which
+# the container's onboard script reads too — one list, kept in sync automatically.
+# Manifest format is "type|relpath|label"; internally we use "LABEL|PATH|type"
+# (item_label/item_path/item_type read fields 1/2/3), so we reorder while reading.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MANIFEST="$SCRIPT_DIR/dotfiles.manifest"
+
+if [ ! -f "$MANIFEST" ]; then
+  echo "ERROR: dotfiles manifest not found at $MANIFEST" >&2
+  exit 1
+fi
+
+ITEMS=()
+while IFS='|' read -r TYPE REL LABEL; do
+  ITEMS+=("$LABEL|$REL|$TYPE")
+done < <(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST")
 
 DOTFILES_DIR="$HOME/.dotfiles"
 
