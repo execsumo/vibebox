@@ -14,9 +14,10 @@ A containerized Linux dev workspace for running AI coding agents from a Windows 
 | Codex CLI | AI coding agent (OpenAI) |
 | Antigravity (`agy`) | AI coding agent (Google) |
 | Herdr | AI coding agent (Herdr) |
-| Grok CLI | AI coding agent (xAI) |
+| Pi (`pi`) | AI coding agent (Earendil Works) |
 | Hermes Agent | AI coding agent (Nous Research) |
 | Hermes WebUI | Web frontend for Hermes Agent, served at `https://hermes.<tailnet>.ts.net` |
+| RTK | Token-reducing command wrapper — hooks into each agent CLI, wired up by `onboard` |
 | CodeGraph | Code-index MCP server for the agent CLIs — wired up by `onboard` |
 | codeburn | AI spend tracker (by task, tool, model, project) |
 | Node.js + npm | LTS (v22 by default) |
@@ -150,7 +151,27 @@ This one-time script personalizes the sandbox. It is idempotent — safe to re-r
 1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
 2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
 3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
-4. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
+4. **RTK wiring** — runs `rtk init` for each installed agent CLI (Claude Code, Codex, Antigravity, Hermes, Pi), installing the hook that compresses command output before it reaches the agent's context
+5. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
+
+### RTK
+
+RTK intercepts Bash commands the agents run and rewrites them to token-efficient
+equivalents, cutting the output that lands in context. `onboard` wires it into every
+agent CLI it finds installed, records a marker at `~/.vibebox/rtk-initialized`, and skips
+on later runs. Wire up an agent by hand after adding one:
+
+```bash
+rtk init -g --auto-patch                 # Claude Code (RTK's default target)
+rtk init -g --codex --auto-patch         # Codex
+rtk init -g --agent antigravity --auto-patch
+rtk init -g --agent hermes --auto-patch
+rtk init -g --agent pi --auto-patch
+```
+
+Run `rtk init --show` to verify an existing install, or `rtk init --uninstall` to remove
+the hook. Like CodeGraph below, this can't be baked into the image — it writes per-user
+config into `$HOME`, which is a persisted volume that masks image content.
 
 ### CodeGraph
 
@@ -227,11 +248,24 @@ The repo mirrors your home directory exactly. The `onboard` script links these f
 |---|---|
 | `.config/herdr/` _(dir)_ | Herdr config directory |
 
-**Grok CLI**
+**Pi (`pi`)**
 
 | File | Purpose |
 |---|---|
-| `.config/grok/` _(dir)_ | Grok CLI config directory |
+| `.pi/` _(dir)_ | Pi config directory |
+
+Pi keeps config *and* state (auth, sessions) under `~/.pi/agent/`, so linking it shares
+auth across machines. Set `PI_CODING_AGENT_DIR` to relocate that state if you would
+rather keep it machine-local.
+
+**RTK**
+
+| File | Purpose |
+|---|---|
+| `.config/rtk/` _(dir)_ | RTK config directory (`config.toml`) |
+
+RTK's per-agent hooks live in each agent's own config (linked above), not here — so
+linking `.config/rtk/` shares your RTK settings, and `onboard` re-installs the hooks.
 
 **Hermes Agent**
 
@@ -410,6 +444,7 @@ BUN_VERSION=latest
 CLAUDE_CODE_VERSION=latest
 CODEX_VERSION=latest
 CODEBURN_VERSION=latest
+PI_CODING_AGENT_VERSION=latest
 PYRIGHT_VERSION=latest
 TYPESCRIPT_VERSION=latest
 TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest
@@ -421,13 +456,16 @@ TAILWIND_LANGUAGE_SERVER_VERSION=latest
 
 ### API Keys
 
-Set these in `.env` so the container picks them up automatically:
+None are required. Every bundled agent (Claude Code, Codex, Antigravity, Herdr, Hermes,
+Pi) authenticates interactively inside the container via its own flow — `claude auth`,
+`codex login`, `gh auth`, `pi` then `/login`.
+
+If you would rather a tool read a key from the environment, add it to `.env` and it is
+picked up on container start. For example, Pi honours `ANTHROPIC_API_KEY` when set:
 
 ```env
-XAI_API_KEY=xai-...   # Grok CLI (xAI)
+ANTHROPIC_API_KEY=sk-ant-...
 ```
-
-Other agents (Claude Code, Codex, Antigravity) use their own auth flows (`claude auth`, `codex login`, `gh auth`) and don't need API keys in `.env`.
 
 The core toolchain intentionally tracks `latest` — backups rewind the persisted volumes, but the toolchain lives in `/usr` (not persisted), so rebuilt images always pick up current tools. Pin exact versions if you need a reproducible environment.
 

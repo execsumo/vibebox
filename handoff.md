@@ -105,7 +105,8 @@ If the tool's config directory is unknown, add a `dir` entry for the most likely
 | codeburn | npm global (tolerated) | `/usr/local/bin/codeburn` | `npm update -g` | `.config/codeburn/` |
 | Antigravity (`agy`) | install script | `/usr/local/bin/agy` | re-run installer (no update cmd) | `.gemini/antigravity-cli/` |
 | Herdr | install script | `/usr/local/bin/herdr` | re-run installer | `.config/herdr/` |
-| Grok CLI | install script | `/usr/local/bin/grok` | re-run installer | `.config/grok/` |
+| Pi | npm global (tolerated, `--ignore-scripts`) | `/usr/local/bin/pi` | `npm update -g` | `.pi/` |
+| RTK | install script | `/usr/local/bin/rtk` | re-run installer (update step 6) | `.config/rtk/` |
 | Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
 | Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 10) | state under `.hermes/webui/` |
 | CodeGraph | install script | `/usr/local/bin/codegraph` | re-run installer | — (per-project `.codegraph/`) |

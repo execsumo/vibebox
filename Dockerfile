@@ -9,6 +9,7 @@ ARG BUN_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
 ARG CODEBURN_VERSION=latest
+ARG PI_CODING_AGENT_VERSION=latest
 ARG PYRIGHT_VERSION=latest
 ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest
 ARG TYPESCRIPT_VERSION=latest
@@ -78,6 +79,11 @@ RUN npm install -g \
 # cannot fail a build that already produced the whole core toolchain.
 RUN npm install -g codeburn@${CODEBURN_VERSION} || echo "codeburn setup skipped"
 
+# 4c. Install Pi coding agent (npm global). --ignore-scripts per upstream recommendation
+# (see https://github.com/earendil-works/pi). Tolerated so a registry hiccup cannot
+# fail a build that already produced the whole core toolchain.
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} || echo "Pi setup skipped"
+
 # 5. Install Antigravity CLI (agy) via the official installer
 # (Includes a safe fallback in case the external link requires specific host context or is not reachable)
 RUN (curl -fsSL https://antigravity.google/cli/install.sh | bash && cp /root/.local/bin/agy /usr/local/bin/agy && chmod +x /usr/local/bin/agy) || echo "Antigravity CLI setup skipped or requires manual auth"
@@ -87,10 +93,14 @@ RUN (curl -fsSL https://herdr.dev/install.sh | sh && \
      (cp /root/.local/bin/herdr /usr/local/bin/herdr 2>/dev/null || true) && \
      chmod +x /usr/local/bin/herdr 2>/dev/null) || echo "Herdr CLI setup skipped"
 
-# 7. Install Grok CLI via the official installer
-RUN (curl -fsSL https://x.ai/cli/install.sh | bash && \
-     (cp /root/.local/bin/grok /usr/local/bin/grok 2>/dev/null || true) && \
-     chmod +x /usr/local/bin/grok 2>/dev/null) || echo "Grok CLI setup skipped or requires manual auth"
+# 7. Install RTK (Rust Token Killer) via the official installer.
+# Reduces LLM token consumption by 60-90% by filtering/compressing command outputs
+# before they reach the agent's context. `onboard` runs `rtk init` per-agent (writes
+# per-user config into $HOME, so it cannot be baked into the image — same reason as
+# CodeGraph).
+RUN (curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh && \
+     (cp /root/.local/bin/rtk /usr/local/bin/rtk 2>/dev/null || true) && \
+     chmod +x /usr/local/bin/rtk 2>/dev/null) || echo "RTK setup skipped"
 
 # 8. Install Hermes Agent via the official installer.
 # Running as root, the installer uses root-mode and lands the binary in /usr/local/bin
@@ -125,7 +135,7 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
     for t in claude codex bun node gh; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
-    for t in agy herdr grok hermes codegraph codeburn; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done; \
+    for t in agy herdr rtk hermes codegraph codeburn pi; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done; \
     [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"
 
 # Build argument to customize the SSH username (defaults to dev)

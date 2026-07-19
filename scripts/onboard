@@ -120,7 +120,59 @@ else
   fi
 fi
 
-# ── 4. CodeGraph agent wiring ─────────────────────────────────────────────────
+# ── 4. RTK agent wiring ───────────────────────────────────────────────────────
+# Installs RTK's auto-rewrite hook into each agent CLI that is actually present,
+# so command output is compressed before it reaches the agent's context. Like
+# CodeGraph below, this writes per-user config into $HOME (~/.config/rtk/ plus
+# each agent's own config), so it cannot be baked into the image — $HOME is a
+# persisted volume that masks image content on rebuilds.
+step "RTK agent wiring"
+RTK_MARKER="$HOME/.vibebox/rtk-initialized"
+
+if ! command -v rtk &>/dev/null; then
+  warn "rtk not installed — skipping (rebuild the image to install it)"
+elif [ -f "$RTK_MARKER" ]; then
+  ok "Already wired up ($(cat "$RTK_MARKER"))"
+  echo "    Re-run with: rtk init -g --auto-patch   (add --agent <name> per agent)"
+else
+  # binary|label|extra flags. Claude Code is RTK's default target and takes no flag.
+  RTK_AGENTS=(
+    "claude|Claude Code|"
+    "codex|Codex CLI|--codex"
+    "agy|Antigravity|--agent antigravity"
+    "hermes|Hermes Agent|--agent hermes"
+    "pi|Pi|--agent pi"
+  )
+
+  RTK_WIRED=()
+  RTK_FAILED=()
+
+  for entry in "${RTK_AGENTS[@]}"; do
+    IFS='|' read -r BIN LABEL FLAGS <<<"$entry"
+    command -v "$BIN" &>/dev/null || continue
+    # shellcheck disable=SC2086 -- FLAGS is intentionally word-split
+    if rtk init -g $FLAGS --auto-patch &>/dev/null; then
+      RTK_WIRED+=("$LABEL")
+    else
+      RTK_FAILED+=("$LABEL")
+    fi
+  done
+
+  if [ ${#RTK_WIRED[@]} -gt 0 ]; then
+    mkdir -p "$(dirname "$RTK_MARKER")"
+    date -u '+wired %Y-%m-%d' > "$RTK_MARKER"
+    ok "RTK hook installed for: ${RTK_WIRED[*]}"
+  fi
+  if [ ${#RTK_FAILED[@]} -gt 0 ]; then
+    warn "RTK wiring failed for: ${RTK_FAILED[*]}"
+    warn "Re-run manually, e.g.: rtk init -g --agent <name>   (see 'rtk init --help')"
+  fi
+  if [ ${#RTK_WIRED[@]} -eq 0 ] && [ ${#RTK_FAILED[@]} -eq 0 ]; then
+    warn "No supported agent CLIs found — nothing to wire"
+  fi
+fi
+
+# ── 5. CodeGraph agent wiring ─────────────────────────────────────────────────
 # Registers CodeGraph's MCP server with whichever agent CLIs are installed. This
 # cannot be baked into the image: it writes per-user config into $HOME (e.g.
 # ~/.claude.json), and $HOME is a persisted volume that masks image content. Run

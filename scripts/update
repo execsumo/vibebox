@@ -12,14 +12,15 @@ echo "3/10 Cleaning up old, unnecessary files..."
 # Autoremove orphaned packages and clear APT package download caches to save container space
 sudo apt-get autoremove -y && sudo apt-get clean
 echo ""
-echo "4/10 Updating global NPM CLIs (Claude Code, Codex, codeburn, language servers)..."
+echo "4/10 Updating global NPM CLIs (Claude Code, Codex, Pi, codeburn, language servers)..."
 sudo npm update -g
 echo ""
 echo "5/10 Updating Bun..."
 sudo bun upgrade || true
 echo ""
-echo "6/10 Updating Grok CLI..."
-(curl -fsSL https://x.ai/cli/install.sh | bash && (sudo cp ~/.local/bin/grok /usr/local/bin/grok 2>/dev/null || true)) || true
+echo "6/10 Updating RTK (Rust Token Killer)..."
+(curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh && (sudo cp ~/.local/bin/rtk /usr/local/bin/rtk 2>/dev/null || true)) || true
+echo "    Re-run 'onboard' (or 'rtk init -g') if you added or removed agent CLIs."
 echo ""
 echo "7/10 Updating Herdr..."
 (curl -fsSL https://herdr.dev/install.sh | sh && (sudo cp ~/.local/bin/herdr /usr/local/bin/herdr 2>/dev/null || true)) || true

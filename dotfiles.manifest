@@ -34,8 +34,13 @@ dir|.gemini/antigravity-cli/skills|Antigravity skills (.gemini/antigravity-cli/s
 # Herdr
 dir|.config/herdr|Herdr config dir (.config/herdr/)
 
-# Grok CLI
-dir|.config/grok|Grok CLI config dir (.config/grok/)
+# Pi coding agent
+# Note: ~/.pi/agent/ holds Pi's config and state (auth included). Override the
+# location with PI_CODING_AGENT_DIR if you want state kept out of your dotfiles.
+dir|.pi|Pi config dir (.pi/)
+
+# RTK (Rust Token Killer)
+dir|.config/rtk|RTK config dir (.config/rtk/)
 
 # Hermes Agent
 # Note: ~/.hermes also holds the cloned source tree, auth and sessions — not just
