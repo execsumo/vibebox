@@ -15,6 +15,9 @@ A containerized Linux dev workspace for running AI coding agents from a Windows 
 | Antigravity (`agy`) | AI coding agent (Google) |
 | Herdr | AI coding agent (Herdr) |
 | Grok CLI | AI coding agent (xAI) |
+| Hermes Agent | AI coding agent (Nous Research) |
+| CodeGraph | Code-index MCP server for the agent CLIs — wired up by `onboard` |
+| codeburn | AI spend tracker (by task, tool, model, project) |
 | Node.js + npm | LTS (v22 by default) |
 | Bun | Fast JS runtime / package manager |
 | Python | System Python 3 |
@@ -131,6 +134,24 @@ This one-time script personalizes the sandbox. It is idempotent — safe to re-r
 1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
 2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
 3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
+4. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
+
+### CodeGraph
+
+`onboard` handles the wiring, so there is normally nothing to do by hand. It records a
+marker at `~/.vibebox/codegraph-installed` and skips on later runs; re-run it yourself
+after adding or removing an agent CLI:
+
+```bash
+codegraph install
+```
+
+**Why this step isn't baked into the image:** it writes per-user agent config into `$HOME`
+(e.g. `~/.claude.json`), and `$HOME` is a persisted Docker volume that masks image content
+— so a build-time run would never reach your user. Running it inside the container writes
+into the volume instead, which means it **survives rebuilds**.
+
+Indexing is per-project: run `codegraph` in a repo to build its `.codegraph/` index.
 
 ### Setting up dotfiles from your main machine
 
@@ -195,6 +216,25 @@ The repo mirrors your home directory exactly. The `onboard` script links these f
 | File | Purpose |
 |---|---|
 | `.config/grok/` _(dir)_ | Grok CLI config directory |
+
+**Hermes Agent**
+
+| File | Purpose |
+|---|---|
+| `.hermes/` _(dir)_ | Hermes config directory |
+
+Note that `~/.hermes/` also holds Hermes' cloned source tree, auth, and sessions — not
+just config. Linking it shares all of that across machines; skip it in the
+`dotfiles-init.sh` checklist if you would rather keep auth machine-local.
+
+**codeburn**
+
+| File | Purpose |
+|---|---|
+| `.config/codeburn/` _(dir)_ | Spend config: `config.json` (currency, model aliases), `guard.json` (budget caps) |
+
+CodeGraph is deliberately absent — its state is per-project (`.codegraph/` and an optional
+`codegraph.json` at the project root), so it belongs in each repo, not your dotfiles.
 
 Only files that exist in your repo are linked — the rest are left alone.
 
@@ -353,6 +393,7 @@ NODE_MAJOR=22
 BUN_VERSION=latest
 CLAUDE_CODE_VERSION=latest
 CODEX_VERSION=latest
+CODEBURN_VERSION=latest
 PYRIGHT_VERSION=latest
 TYPESCRIPT_VERSION=latest
 TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest

@@ -8,6 +8,7 @@ ARG NODE_MAJOR=22
 ARG BUN_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
+ARG CODEBURN_VERSION=latest
 ARG PYRIGHT_VERSION=latest
 ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest
 ARG TYPESCRIPT_VERSION=latest
@@ -72,6 +73,11 @@ RUN npm install -g \
     @tailwindcss/language-server@${TAILWIND_LANGUAGE_SERVER_VERSION} \
     && npm cache clean --force
 
+# 4b. Install codeburn (AI spend tracker) as a tolerated npm global.
+# Kept out of the step-4 block so a publish/registry hiccup on this optional tool
+# cannot fail a build that already produced the whole core toolchain.
+RUN npm install -g codeburn@${CODEBURN_VERSION} || echo "codeburn setup skipped"
+
 # 5. Install Antigravity CLI (agy) via the official installer
 # (Includes a safe fallback in case the external link requires specific host context or is not reachable)
 RUN (curl -fsSL https://antigravity.google/cli/install.sh | bash && cp /root/.local/bin/agy /usr/local/bin/agy && chmod +x /usr/local/bin/agy) || echo "Antigravity CLI setup skipped or requires manual auth"
@@ -86,17 +92,34 @@ RUN (curl -fsSL https://x.ai/cli/install.sh | bash && \
      (cp /root/.local/bin/grok /usr/local/bin/grok 2>/dev/null || true) && \
      chmod +x /usr/local/bin/grok 2>/dev/null) || echo "Grok CLI setup skipped or requires manual auth"
 
-# 7b. Verify installs so a build cannot silently succeed with tooling missing.
-# Hard-fail on the daily-driver tools; loud-warn on the optional agent CLIs whose
+# 8. Install Hermes Agent via the official installer.
+# Running as root, the installer uses root-mode and lands the binary in /usr/local/bin
+# directly; the cp is a fallback in case it takes the per-user (~/.local/bin) path.
+RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && \
+     (cp /root/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true) && \
+     chmod +x /usr/local/bin/hermes 2>/dev/null) || echo "Hermes Agent setup skipped or requires manual auth"
+
+# 9. Install CodeGraph — last tool step, since `codegraph install` wires itself into
+# whichever agent CLIs are present and should see the full set installed above.
+# NOTE: `codegraph install` is NOT run here. It writes per-user agent config into $HOME
+# (e.g. ~/.claude.json), and $HOME is a persisted volume that masks image content on
+# rebuilds — so a build-time run as root would not reach the sandbox user. Run it once
+# inside the container instead (documented in README).
+RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh && \
+     (cp /root/.local/bin/codegraph /usr/local/bin/codegraph 2>/dev/null || true) && \
+     chmod +x /usr/local/bin/codegraph 2>/dev/null) || echo "CodeGraph setup skipped"
+
+# 9b. Verify installs so a build cannot silently succeed with tooling missing.
+# Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
     for t in claude codex bun node gh; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
-    for t in agy herdr grok; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done
+    for t in agy herdr grok hermes codegraph codeburn; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done
 
 # Build argument to customize the SSH username (defaults to dev)
 ARG USERNAME=dev
 
-# 8. Configure the SSH daemon
+# 10. Configure the SSH daemon
 RUN mkdir /var/run/sshd && \
     # Secure defaults: No root login, enable pubkey, disable password logins
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \

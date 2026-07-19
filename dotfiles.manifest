@@ -36,3 +36,11 @@ dir|.config/herdr|Herdr config dir (.config/herdr/)
 
 # Grok CLI
 dir|.config/grok|Grok CLI config dir (.config/grok/)
+
+# Hermes Agent
+# Note: ~/.hermes also holds the cloned source tree, auth and sessions — not just
+# config. Symlinking it to your dotfiles repo shares all of that across machines.
+dir|.hermes|Hermes Agent config dir (.hermes/)
+
+# codeburn
+dir|.config/codeburn|codeburn config dir (.config/codeburn/)
