@@ -2,34 +2,39 @@
 echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
-echo "1/9 Creating automatic safety backup..."
+echo "1/10 Creating automatic safety backup..."
 backup "auto-before-update"
 echo ""
-echo "2/9 Updating system packages (APT)..."
+echo "2/10 Updating system packages (APT)..."
 sudo apt-get update && sudo apt-get upgrade -y
 echo ""
-echo "3/9 Cleaning up old, unnecessary files..."
+echo "3/10 Cleaning up old, unnecessary files..."
 # Autoremove orphaned packages and clear APT package download caches to save container space
 sudo apt-get autoremove -y && sudo apt-get clean
 echo ""
-echo "4/9 Updating global NPM CLIs (Claude Code, Codex, codeburn, language servers)..."
+echo "4/10 Updating global NPM CLIs (Claude Code, Codex, codeburn, language servers)..."
 sudo npm update -g
 echo ""
-echo "5/9 Updating Bun..."
+echo "5/10 Updating Bun..."
 sudo bun upgrade || true
 echo ""
-echo "6/9 Updating Grok CLI..."
+echo "6/10 Updating Grok CLI..."
 (curl -fsSL https://x.ai/cli/install.sh | bash && (sudo cp ~/.local/bin/grok /usr/local/bin/grok 2>/dev/null || true)) || true
 echo ""
-echo "7/9 Updating Herdr..."
+echo "7/10 Updating Herdr..."
 (curl -fsSL https://herdr.dev/install.sh | sh && (sudo cp ~/.local/bin/herdr /usr/local/bin/herdr 2>/dev/null || true)) || true
 echo ""
-echo "8/9 Updating Hermes Agent..."
+echo "8/10 Updating Hermes Agent..."
 (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && (sudo cp ~/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true)) || true
 echo ""
-echo "9/9 Updating CodeGraph..."
+echo "9/10 Updating CodeGraph..."
 (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh && (sudo cp ~/.local/bin/codegraph /usr/local/bin/codegraph 2>/dev/null || true)) || true
 echo "    Re-run 'codegraph install' if you added or removed agent CLIs."
+echo ""
+echo "10/10 Updating Hermes WebUI..."
+(git -C /opt/hermes-webui pull --ff-only && \
+ /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
+ /opt/hermes-webui/ctl.sh restart) || true
 echo ""
 echo "=============================================="
 echo "System packages updated and container pruned successfully."

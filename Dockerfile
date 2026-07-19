@@ -99,6 +99,17 @@ RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && \
      (cp /root/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true) && \
      chmod +x /usr/local/bin/hermes 2>/dev/null) || echo "Hermes Agent setup skipped or requires manual auth"
 
+# 8b. Install Hermes WebUI (web frontend for the Hermes Agent installed in step 8).
+# Cloned into /opt (image-managed) so a rebuild updates agent + webui together —
+# upstream warns against version skew between the two. Runtime state (sessions,
+# pid, logs) lands in ~/.hermes/webui on the persisted home volume. Owned by the
+# sandbox user (UID 1000, created later) so `update` can git-pull and ctl.sh can
+# run without sudo. Started at container boot by the entrypoint.
+RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/hermes-webui && \
+     python3 -m venv /opt/hermes-webui/.venv && \
+     /opt/hermes-webui/.venv/bin/pip install --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
+     chown -R 1000:1000 /opt/hermes-webui) || echo "Hermes WebUI setup skipped"
+
 # 9. Install CodeGraph — last tool step, since `codegraph install` wires itself into
 # whichever agent CLIs are present and should see the full set installed above.
 # NOTE: `codegraph install` is NOT run here. It writes per-user agent config into $HOME
@@ -114,7 +125,8 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
     for t in claude codex bun node gh; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
-    for t in agy herdr grok hermes codegraph codeburn; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done
+    for t in agy herdr grok hermes codegraph codeburn; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done; \
+    [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"
 
 # Build argument to customize the SSH username (defaults to dev)
 ARG USERNAME=dev

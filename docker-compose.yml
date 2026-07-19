@@ -33,6 +33,35 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # Second Tailscale identity dedicated to the Hermes WebUI. One tailscale node =
+  # one hostname, so serving the webui as its own tailnet name requires its own
+  # node: this sidecar joins the tailnet as <HERMES_HOSTNAME> and `tailscale serve`
+  # (declared in hermes-serve/serve.json) terminates TLS on 443 and proxies to the
+  # webui, which listens on 8787 inside the vibebox netns — reached here via the
+  # compose DNS name "tailscale". Userspace mode: serve is a plain L7 proxy, so no
+  # TUN device, NET_ADMIN, or sysctls are needed, and a restart of this container
+  # never disturbs the sandbox netns (unlike the tailscale service above).
+  hermes-ts:
+    image: tailscale/tailscale:latest
+    container_name: ${SANDBOX_NAME:-vibebox}-hermes-ts
+    hostname: ${HERMES_HOSTNAME:-hermes}
+    environment:
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=true
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_SERVE_CONFIG=/config/serve.json
+    volumes:
+      - hermes_ts_state:/var/lib/tailscale
+      # Directory mount (not a single file) so tailscale detects config updates.
+      - ./hermes-serve:/config:ro
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--peers=false"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   sandbox:
     build:
       context: .
@@ -63,6 +92,8 @@ services:
     environment:
       - SANDBOX_NAME=${SANDBOX_NAME:-vibebox}
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
+      # Consumed by the entrypoint when starting the Hermes WebUI daemon.
+      - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:-}
     volumes:
       # Mount the public SSH keys as read-only from the host into the user's home folder
       - ./authorized_keys:/home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys:ro
@@ -92,3 +123,7 @@ volumes:
   # Named volume to persist Tailscale authentication and state between container runs
   tailscale_state:
     name: ${SANDBOX_NAME:-vibebox}-tailscale-state
+  # Same, for the hermes-ts sidecar: keeps the <HERMES_HOSTNAME> node identity
+  # stable across rebuilds (no hermes-1, hermes-2 hostname sprawl).
+  hermes_ts_state:
+    name: ${SANDBOX_NAME:-vibebox}-hermes-ts-state

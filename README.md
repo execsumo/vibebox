@@ -16,6 +16,7 @@ A containerized Linux dev workspace for running AI coding agents from a Windows 
 | Herdr | AI coding agent (Herdr) |
 | Grok CLI | AI coding agent (xAI) |
 | Hermes Agent | AI coding agent (Nous Research) |
+| Hermes WebUI | Web frontend for Hermes Agent, served at `https://hermes.<tailnet>.ts.net` |
 | CodeGraph | Code-index MCP server for the agent CLIs — wired up by `onboard` |
 | codeburn | AI spend tracker (by task, tool, model, project) |
 | Node.js + npm | LTS (v22 by default) |
@@ -118,6 +119,21 @@ ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>
 ```
 
 Do not pass `-p <SSH_PORT>` for remote connections. That port only remaps host-local access; over Tailscale, the container's sshd is always on port 22.
+
+## Hermes WebUI
+
+The [Hermes WebUI](https://github.com/nesquena/hermes-webui) runs inside the sandbox (it drives the Hermes Agent in-process, sharing `~/.hermes` and the full toolchain) and is served to your tailnet at:
+
+```
+https://<HERMES_HOSTNAME>.<your-tailnet>.ts.net     (default: https://hermes.…)
+```
+
+Because one Tailscale node can only carry one hostname, the webui gets its own node: the `hermes-ts` sidecar joins the tailnet as `<HERMES_HOSTNAME>` and uses `tailscale serve` (config in `hermes-serve/serve.json`) to terminate HTTPS on 443 and proxy to the webui on port 8787. SSH access via `<SANDBOX_NAME>` is unaffected.
+
+- **Set `HERMES_WEBUI_PASSWORD` in `.env` before starting.** The webui binds beyond localhost so the sidecar can reach it, making it visible to every device on your tailnet (and nothing outside — Funnel is off). Upstream requires a password for non-localhost binds.
+- **Tailnet prerequisites:** MagicDNS and HTTPS certificates must be enabled in the Tailscale admin console. The first visit can take ~10 s while the Let's Encrypt certificate provisions.
+- The webui starts automatically on container boot. Inside the sandbox, manage it with `/opt/hermes-webui/ctl.sh status|logs|restart|stop`; logs are at `~/.hermes/webui.log`.
+- If your `TS_AUTHKEY` is tagged, your tailnet ACLs must allow your devices to reach that tag on port 443.
 
 ## First-Time Setup
 

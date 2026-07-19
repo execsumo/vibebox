@@ -107,6 +107,7 @@ If the tool's config directory is unknown, add a `dir` entry for the most likely
 | Herdr | install script | `/usr/local/bin/herdr` | re-run installer | `.config/herdr/` |
 | Grok CLI | install script | `/usr/local/bin/grok` | re-run installer | `.config/grok/` |
 | Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
+| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 10) | state under `.hermes/webui/` |
 | CodeGraph | install script | `/usr/local/bin/codegraph` | re-run installer | — (per-project `.codegraph/`) |
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |

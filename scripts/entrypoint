@@ -13,4 +13,18 @@ mkdir -p "$KEYDIR"
 [ -f "$KEYDIR/ssh_host_ed25519_key" ] || ssh-keygen -q -t ed25519 -f "$KEYDIR/ssh_host_ed25519_key" -N ""
 [ -f "$KEYDIR/ssh_host_rsa_key" ]     || ssh-keygen -q -t rsa -b 4096 -f "$KEYDIR/ssh_host_rsa_key" -N ""
 
+# Start Hermes WebUI as the sandbox user if installed (daemonized via ctl.sh, so
+# sshd startup is not blocked; failure is non-fatal). Binds 0.0.0.0 so the
+# hermes-ts tailscale sidecar can proxy https://<HERMES_HOSTNAME>.<tailnet>.ts.net
+# to it across the compose network. HERMES_WEBUI_PASSWORD comes from .env via the
+# compose environment and is effectively required for the non-localhost bind.
+if [ -x /opt/hermes-webui/ctl.sh ]; then
+  SANDBOX_USER="$(getent passwd 1000 | cut -d: -f1)"
+  runuser -u "$SANDBOX_USER" -- env \
+    HERMES_WEBUI_HOST="${HERMES_WEBUI_HOST:-0.0.0.0}" \
+    HERMES_WEBUI_PORT=8787 \
+    HERMES_WEBUI_PASSWORD="${HERMES_WEBUI_PASSWORD:-}" \
+    /opt/hermes-webui/ctl.sh start || echo "hermes-webui failed to start (non-fatal)"
+fi
+
 exec "$@"
