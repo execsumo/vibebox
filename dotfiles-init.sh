@@ -135,7 +135,7 @@ done
 while true; do
   print_menu
   read -rp "  Toggle [1-${#ITEMS[@]}], a, n, or done: " INPUT
-  INPUT="${INPUT,,}"  # lowercase
+  INPUT="$(echo "$INPUT" | tr '[:upper:]' '[:lower:]')"  # lowercase
 
   if [ "$INPUT" = "done" ]; then
     break
