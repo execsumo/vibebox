@@ -151,27 +151,41 @@ This one-time script personalizes the sandbox. It is idempotent — safe to re-r
 1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
 2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
 3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
-4. **RTK wiring** — runs `rtk init` for each installed agent CLI (Claude Code, Codex, Antigravity, Hermes, Pi), installing the hook that compresses command output before it reaches the agent's context
+4. **RTK wiring** — runs `rtk init` for each installed global-scope agent CLI (Claude Code, Codex, Hermes, Pi), installing the hook that compresses command output before it reaches the agent's context
 5. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
 
 ### RTK
 
 RTK intercepts Bash commands the agents run and rewrites them to token-efficient
 equivalents, cutting the output that lands in context. `onboard` wires it into every
-agent CLI it finds installed, records a marker at `~/.vibebox/rtk-initialized`, and skips
-on later runs. Wire up an agent by hand after adding one:
+global-scope agent CLI it finds installed, records a marker at `~/.vibebox/rtk-initialized`,
+and skips on later runs. Wire up an agent by hand after adding one:
 
 ```bash
-rtk init -g --auto-patch                 # Claude Code (RTK's default target)
-rtk init -g --codex --auto-patch         # Codex
-rtk init -g --agent antigravity --auto-patch
-rtk init -g --agent hermes --auto-patch
-rtk init -g --agent pi --auto-patch
+rtk init -g --auto-patch                  # Claude Code (RTK's default target)
+rtk init -g --codex                       # Codex — rejects --auto-patch
+rtk init -g --agent hermes --auto-patch   # Hermes
+rtk init -g --agent pi --auto-patch       # Pi
+```
+
+**Antigravity is project-scoped** and is deliberately not wired by `onboard` — it writes
+its rules into the working directory, so a run from `$HOME` would only litter your home
+directory. Run it inside each project you want covered:
+
+```bash
+rtk init --agent antigravity              # note: no -g
 ```
 
 Run `rtk init --show` to verify an existing install, or `rtk init --uninstall` to remove
 the hook. Like CodeGraph below, this can't be baked into the image — it writes per-user
 config into `$HOME`, which is a persisted volume that masks image content.
+
+**Interaction with dotfiles:** RTK patches `~/.claude/settings.json` (adds a `PreToolUse`
+hook) and appends `@RTK.md` to `~/.claude/CLAUDE.md`. Both are symlinked by the dotfiles
+step that runs before it, so the edits land in your dotfiles repo and sync across
+machines. RTK merges rather than overwrites and is idempotent, so existing settings
+survive and re-runs don't duplicate entries — but expect uncommitted changes in
+`~/.dotfiles` after your first `onboard`.
 
 ### CodeGraph
 

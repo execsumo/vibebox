@@ -135,13 +135,21 @@ elif [ -f "$RTK_MARKER" ]; then
   ok "Already wired up ($(cat "$RTK_MARKER"))"
   echo "    Re-run with: rtk init -g --auto-patch   (add --agent <name> per agent)"
 else
-  # binary|label|extra flags. Claude Code is RTK's default target and takes no flag.
+  # RTK refuses to create an agent's config dir itself and errors out if it is
+  # missing, which it is on a fresh box where the agent has never been launched.
+  mkdir -p "$HOME/.claude" "$HOME/.codex"
+
+  # binary|label|full flag string passed to `rtk init`. Flags differ per agent:
+  # Claude Code is RTK's default target and needs no --agent; --codex rejects
+  # --auto-patch outright (it patches AGENTS.md, not a settings.json).
+  # Antigravity is deliberately absent — it is project-scoped (writes
+  # .agents/rules/ into the working directory), so it is handled per-project
+  # below rather than wired globally here.
   RTK_AGENTS=(
-    "claude|Claude Code|"
-    "codex|Codex CLI|--codex"
-    "agy|Antigravity|--agent antigravity"
-    "hermes|Hermes Agent|--agent hermes"
-    "pi|Pi|--agent pi"
+    "claude|Claude Code|-g --auto-patch"
+    "codex|Codex CLI|-g --codex"
+    "hermes|Hermes Agent|-g --agent hermes --auto-patch"
+    "pi|Pi|-g --agent pi --auto-patch"
   )
 
   RTK_WIRED=()
@@ -151,7 +159,7 @@ else
     IFS='|' read -r BIN LABEL FLAGS <<<"$entry"
     command -v "$BIN" &>/dev/null || continue
     # shellcheck disable=SC2086 -- FLAGS is intentionally word-split
-    if rtk init -g $FLAGS --auto-patch &>/dev/null; then
+    if rtk init $FLAGS &>/dev/null; then
       RTK_WIRED+=("$LABEL")
     else
       RTK_FAILED+=("$LABEL")
@@ -169,6 +177,11 @@ else
   fi
   if [ ${#RTK_WIRED[@]} -eq 0 ] && [ ${#RTK_FAILED[@]} -eq 0 ]; then
     warn "No supported agent CLIs found — nothing to wire"
+  fi
+
+  if command -v agy &>/dev/null; then
+    echo "    Antigravity is project-scoped: run 'rtk init --agent antigravity'"
+    echo "    inside a project to add its RTK rules there."
   fi
 fi
 
