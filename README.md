@@ -10,7 +10,7 @@ A containerized Linux dev workspace for running AI coding agents from a Windows 
 
 Five steps from clone to coding:
 
-1. **Copy `.env.example` to `.env`** and fill in `TS_AUTHKEY` (required for remote access).
+1. **Copy `.env.example` to `.env`** and fill in `TS_AUTHKEY` (required — setup won't run without it).
 2. **Add your SSH public key** to `authorized_keys` (required).
 3. **Set `HERMES_WEBUI_PASSWORD`** in `.env` (only if you want the Hermes WebUI).
 4. **Run the setup script** — builds and starts the container stack.
@@ -121,7 +121,7 @@ ANTHROPIC_API_KEY=sk-ant-...        # optional; agents auth interactively by def
 
 See the [Reference](#reference) section for all config options (base image, tool versions, resource limits, backup retention).
 
-### Step 2 — Get a Tailscale auth key (Required for remote access)
+### Step 2 — Get a Tailscale auth key (Required)
 
 Generate one at <https://login.tailscale.com/admin/settings/keys> and set it as `TS_AUTHKEY` in `.env`.
 
@@ -131,7 +131,7 @@ Recommended settings:
 - **Ephemeral** — auto-removes the node from your tailnet when it goes offline, so accidental duplicates self-clean.
 - **Tagged** (`tag:vibebox`) — lets tailnet ACLs limit what a compromised sandbox can reach. First add a matching `tagOwners` entry to your tailnet ACLs (e.g. `"tag:vibebox": ["your-user@"]`).
 
-Without `TS_AUTHKEY`, the Tailscale sidecar has nothing to log in with, exits, and gets restarted every minute — which also breaks local SSH.
+This is required, not just for remote access: the sandbox shares the Tailscale sidecar's network namespace, so without a key the sidecar has nothing to log in with, exits, and gets restarted every minute — taking local SSH down with it. There is no interactive-login fallback, and the setup script refuses to run without a key rather than let you sit through a build that ends in a crash loop.
 
 ### Step 3 — Add your SSH public key (Required)
 
@@ -188,8 +188,12 @@ Use `127.0.0.1`, not `localhost` — on Windows, `localhost` resolves to IPv6 (`
 **From any other device on your tailnet:**
 
 ```bash
+ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>.<your-tailnet>.ts.net
+# or, on devices using Tailscale DNS:
 ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>
 ```
+
+The bare hostname resolves only on devices with "Use Tailscale DNS" enabled — the client default, so it usually just works. The full MagicDNS name always works. The setup script prints your actual FQDN.
 
 Do not pass `-p <SANDBOX_SSH_PORT>` for remote connections. That port only remaps host-local access; over Tailscale, the container's sshd is always on port 22.
 
@@ -399,7 +403,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 ### Security Notes
 
 - Backups archive your home directory only — no longer `/etc/shadow` or system secrets. They still contain whatever lives under `$HOME`: `gh`/Claude/Codex auth tokens, shell history, and any private keys you keep there. Treat backup archives as private secrets.
-- The sandbox runs with passwordless `sudo`. A tagged Tailscale auth key (`tag:vibebox`, see [Step 2](#step-2--get-a-tailscale-auth-key-required-for-remote-access)) lets tailnet ACLs bound what a compromised sandbox can reach.
+- The sandbox runs with passwordless `sudo`. A tagged Tailscale auth key (`tag:vibebox`, see [Step 2](#step-2--get-a-tailscale-auth-key-required)) lets tailnet ACLs bound what a compromised sandbox can reach.
 - Tool versions default to `latest`. Pin versions in `.env` and rebuild if you need to recreate a known-good environment.
 
 ### Management Commands

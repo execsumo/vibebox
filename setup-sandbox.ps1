@@ -8,10 +8,11 @@ Write-Host "==============================================" -ForegroundColor Cya
 Write-Host "         Setting up Sandbox Container         " -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 
-# 1. Parse username from .env file
+# 1. Parse settings from .env file
 $Username = "dev"
 $SandboxName = "vibebox"
 $SshPort = "22"
+$TsAuthKey = ""
 $EnvPath = Join-Path $PSScriptRoot ".env"
 if (Test-Path $EnvPath) {
     $EnvContent = Get-Content $EnvPath
@@ -25,10 +26,39 @@ if (Test-Path $EnvPath) {
         if ($Line -match "^SANDBOX_SSH_PORT=(.*)$") {
             $SshPort = $Matches[1].Trim()
         }
+        if ($Line -match "^TS_AUTHKEY=(.*)$") {
+            $TsAuthKey = $Matches[1].Trim()
+        }
     }
 }
 
-# 2. Ensure authorized_keys file exists
+# 2. Require a Tailscale auth key before doing any expensive work.
+#    Interactive login is not a viable fallback here: without a key the tailscale
+#    container exits and crash-loops, orphaning the network namespace the sandbox
+#    shares with it, which breaks even local SSH. Fail now rather than after a
+#    multi-minute image build. A shell env var wins over .env, matching Compose.
+$AuthKey = if (-not [string]::IsNullOrWhiteSpace($env:TS_AUTHKEY)) { $env:TS_AUTHKEY.Trim() } else { $TsAuthKey }
+if ([string]::IsNullOrWhiteSpace($AuthKey) -or -not $AuthKey.StartsWith("tskey-")) {
+    Write-Host ""
+    Write-Host "ERROR: TS_AUTHKEY is not set (or does not look like a Tailscale key)." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  The sandbox shares its network namespace with the tailscale container," -ForegroundColor Cyan
+    Write-Host "  so an unauthenticated tailscale takes SSH down with it." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  1. Generate a key at: https://login.tailscale.com/admin/settings/keys" -ForegroundColor Yellow
+    Write-Host "     (recommended: Reusable + Ephemeral, tagged tag:vibebox)" -ForegroundColor DarkGray
+    Write-Host "  2. Add it to .env as:  TS_AUTHKEY=tskey-auth-..." -ForegroundColor Yellow
+    Write-Host "  3. Re-run this script." -ForegroundColor Yellow
+    Write-Host ""
+    if (-not (Test-Path $EnvPath)) {
+        Write-Host "  No .env found. Start from the template:  copy .env.example .env" -ForegroundColor Yellow
+        Write-Host ""
+    }
+    exit 1
+}
+Write-Host "Tailscale auth key found." -ForegroundColor Green
+
+# 3. Ensure authorized_keys file exists
 $AuthKeysPath = Join-Path $PSScriptRoot "authorized_keys"
 
 if (-not (Test-Path $AuthKeysPath) -or (Get-Item $AuthKeysPath).Length -eq 0) {
@@ -63,7 +93,7 @@ if (-not (Test-Path $AuthKeysPath) -or (Get-Item $AuthKeysPath).Length -eq 0) {
     Write-Host "'authorized_keys' file already exists and is configured." -ForegroundColor Green
 }
 
-# 3. Write/refresh a local SSH alias so you can connect with `ssh <SandboxName>`.
+# 4. Write/refresh a local SSH alias so you can connect with `ssh <SandboxName>`.
 #    Uses 127.0.0.1 (not localhost): the port is published IPv4-only and Windows
 #    resolves localhost to ::1 first. Idempotent via a marked block per sandbox.
 $SshConfigDir = Join-Path $HOME ".ssh"
@@ -94,36 +124,47 @@ $Filtered.Add("# $EndMarker")
 Set-Content -Path $SshConfigPath -Value $Filtered -Encoding ascii
 Write-Host "Configured SSH alias 'Host $SandboxName' -> 127.0.0.1:$SshPort in $SshConfigPath" -ForegroundColor Green
 
-# 4. Build and launch the container stack
+# 5. Build and launch the container stack
 Write-Host ""
 Write-Host "Building and launching container stack via Docker Compose..." -ForegroundColor Cyan
 docker compose up -d --build
 
-# 5. Check status and output connection guide
+# 6. Check status and output connection guide
 Write-Host ""
 Write-Host "Checking container status..." -ForegroundColor Cyan
 $ContainerStatus = docker compose ps --format json
 
 if ($ContainerStatus) {
+    # Ask tailscale for the tailnet suffix so the remote hint is a real FQDN. The
+    # bare name only resolves on devices that accept Tailscale DNS; the FQDN always
+    # does. Best-effort: fall back to the short name if the node isn't up yet.
+    $TailnetFqdn = $SandboxName
+    $StatusJson = docker exec "$SandboxName-tailscale" tailscale status --json 2>$null
+    if ($StatusJson) {
+        $Suffix = [regex]::Match(($StatusJson -join ""), '"MagicDNSSuffix":\s*"([^"]*)"').Groups[1].Value
+        if ($Suffix) { $TailnetFqdn = "$SandboxName.$Suffix" }
+    }
+
     Write-Host "==============================================" -ForegroundColor Green
     Write-Host "      Container is Running Successfully!      " -ForegroundColor Green
     Write-Host "==============================================" -ForegroundColor Green
     Write-Host ""
-    Write-Host "Step 1: Authenticate Tailscale (If not already authenticated)" -ForegroundColor Yellow
-    Write-Host "  To authorize your sandbox on your Tailnet, run:" -ForegroundColor Cyan
-    Write-Host "    docker logs $SandboxName-tailscale" -ForegroundColor Yellow
-    Write-Host "  and click the authentication URL in the log output." -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "Step 2: Connect to your sandbox" -ForegroundColor Yellow
-    Write-Host "  A. Local Connection (from this host PC):" -ForegroundColor Cyan
+    Write-Host "Step 1: Connect to your sandbox" -ForegroundColor Yellow
+    Write-Host "  A. From this host PC:" -ForegroundColor Cyan
     Write-Host "     ssh $SandboxName" -ForegroundColor Yellow
     Write-Host "       (alias added to ~/.ssh/config; same as: ssh -p $SshPort $($Username)@127.0.0.1)" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  B. Remote Connection (from any device on your Tailnet):" -ForegroundColor Cyan
-    Write-Host "     ssh $($Username)@$SandboxName" -ForegroundColor Yellow
+    Write-Host "  B. From any device on your Tailnet:" -ForegroundColor Cyan
+    Write-Host "     ssh $($Username)@$TailnetFqdn" -ForegroundColor Yellow
+    Write-Host "       (or 'ssh $($Username)@$SandboxName' on devices using Tailscale DNS)" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "Step 3: Launch your Workspace" -ForegroundColor Yellow
-    Write-Host "  Once logged into the SSH session, run the ultimate workspace launcher:" -ForegroundColor Cyan
+    Write-Host "Step 2: First-time setup (once per sandbox)" -ForegroundColor Yellow
+    Write-Host "  In the SSH session, run:" -ForegroundColor Cyan
+    Write-Host "     onboard" -ForegroundColor Yellow
+    Write-Host "  Wires up GitHub auth, git identity, dotfiles, RTK, and CodeGraph." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Step 3: Launch your workspace" -ForegroundColor Yellow
+    Write-Host "  Every login, run:" -ForegroundColor Cyan
     Write-Host "     launch" -ForegroundColor Yellow
     Write-Host "  This places you in a persistent Herdr workspace." -ForegroundColor Cyan
 } else {

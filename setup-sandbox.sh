@@ -39,7 +39,35 @@ Username="$(get_env_value SANDBOX_USERNAME dev)"
 SandboxName="$(get_env_value SANDBOX_NAME vibebox)"
 SshPort="$(get_env_value SANDBOX_SSH_PORT 22)"
 
-# 2. Ensure authorized_keys file exists
+# 2. Require a Tailscale auth key before doing any expensive work.
+#    Interactive login is not a viable fallback here: without a key the tailscale
+#    container exits and crash-loops, orphaning the network namespace the sandbox
+#    shares with it, which breaks even local SSH. Fail now rather than after a
+#    multi-minute image build. A shell env var wins over .env, matching Compose.
+AuthKey="${TS_AUTHKEY:-$(get_env_value TS_AUTHKEY '')}"
+case "$AuthKey" in
+    tskey-*) echo "${GREEN}Tailscale auth key found.${RESET}" ;;
+    *)
+        echo ""
+        echo "${RED}ERROR: TS_AUTHKEY is not set (or does not look like a Tailscale key).${RESET}"
+        echo ""
+        echo "${CYAN}  The sandbox shares its network namespace with the tailscale container,${RESET}"
+        echo "${CYAN}  so an unauthenticated tailscale takes SSH down with it.${RESET}"
+        echo ""
+        echo "${YELLOW}  1. Generate a key at: https://login.tailscale.com/admin/settings/keys${RESET}"
+        echo "     (recommended: Reusable + Ephemeral, tagged tag:vibebox)"
+        echo "${YELLOW}  2. Add it to .env as:  TS_AUTHKEY=tskey-auth-...${RESET}"
+        echo "${YELLOW}  3. Re-run this script.${RESET}"
+        echo ""
+        if [ ! -f "$ENV_PATH" ]; then
+            echo "${YELLOW}  No .env found. Start from the template:  cp .env.example .env${RESET}"
+            echo ""
+        fi
+        exit 1
+        ;;
+esac
+
+# 3. Ensure authorized_keys file exists
 AuthKeysPath="$SCRIPT_DIR/authorized_keys"
 
 if [ ! -s "$AuthKeysPath" ]; then
@@ -73,7 +101,7 @@ else
     echo "${GREEN}'authorized_keys' file already exists and is configured.${RESET}"
 fi
 
-# 3. Write/refresh a local SSH alias so you can connect with `ssh <SandboxName>`.
+# 4. Write/refresh a local SSH alias so you can connect with `ssh <SandboxName>`.
 #    Uses 127.0.0.1 (not localhost): the port is published IPv4-only, and on a
 #    Windows host localhost resolves to ::1 first. Idempotent: a marked block per sandbox.
 SshConfigDir="$HOME/.ssh"
@@ -106,36 +134,45 @@ chmod 600 "$SshConfigPath"
 } >> "$SshConfigPath"
 echo "${GREEN}Configured SSH alias 'Host $SandboxName' -> 127.0.0.1:$SshPort in $SshConfigPath${RESET}"
 
-# 4. Build and launch the container stack
+# 5. Build and launch the container stack
 echo ""
 echo "${CYAN}Building and launching container stack via Docker Compose...${RESET}"
 docker compose up -d --build
 
-# 5. Check status and output connection guide
+# 6. Check status and output connection guide
 echo ""
 echo "${CYAN}Checking container status...${RESET}"
 ContainerStatus="$(docker compose ps --format json 2>/dev/null || true)"
 
 if [ -n "$ContainerStatus" ]; then
+    # Ask tailscale for the tailnet suffix so the remote hint is a real FQDN. The
+    # bare name only resolves on devices that accept Tailscale DNS; the FQDN always
+    # does. Best-effort: fall back to the short name if the node isn't up yet.
+    TailnetFqdn="$SandboxName"
+    Suffix="$(docker exec "$SandboxName-tailscale" tailscale status --json 2>/dev/null \
+        | grep -o '"MagicDNSSuffix": *"[^"]*"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
+    [ -n "$Suffix" ] && TailnetFqdn="$SandboxName.$Suffix"
+
     echo "${GREEN}==============================================${RESET}"
     echo "${GREEN}      Container is Running Successfully!      ${RESET}"
     echo "${GREEN}==============================================${RESET}"
     echo ""
-    echo "${YELLOW}Step 1: Authenticate Tailscale (If not already authenticated)${RESET}"
-    echo "${CYAN}  To authorize your sandbox on your Tailnet, run:${RESET}"
-    echo "${YELLOW}    docker logs $SandboxName-tailscale${RESET}"
-    echo "${CYAN}  and click the authentication URL in the log output.${RESET}"
-    echo ""
-    echo "${YELLOW}Step 2: Connect to your sandbox${RESET}"
-    echo "${CYAN}  A. Local Connection (from this host):${RESET}"
+    echo "${YELLOW}Step 1: Connect to your sandbox${RESET}"
+    echo "${CYAN}  A. From this host:${RESET}"
     echo "${YELLOW}     ssh $SandboxName${RESET}"
     echo "       (alias added to ~/.ssh/config; same as: ssh -p $SshPort ${Username}@127.0.0.1)"
     echo ""
-    echo "${CYAN}  B. Remote Connection (from any device on your Tailnet):${RESET}"
-    echo "${YELLOW}     ssh ${Username}@$SandboxName${RESET}"
+    echo "${CYAN}  B. From any device on your Tailnet:${RESET}"
+    echo "${YELLOW}     ssh ${Username}@$TailnetFqdn${RESET}"
+    echo "       (or 'ssh ${Username}@$SandboxName' on devices using Tailscale DNS)"
     echo ""
-    echo "${YELLOW}Step 3: Launch your Workspace${RESET}"
-    echo "${CYAN}  Once logged into the SSH session, run the ultimate workspace launcher:${RESET}"
+    echo "${YELLOW}Step 2: First-time setup (once per sandbox)${RESET}"
+    echo "${CYAN}  In the SSH session, run:${RESET}"
+    echo "${YELLOW}     onboard${RESET}"
+    echo "${CYAN}  Wires up GitHub auth, git identity, dotfiles, RTK, and CodeGraph.${RESET}"
+    echo ""
+    echo "${YELLOW}Step 3: Launch your workspace${RESET}"
+    echo "${CYAN}  Every login, run:${RESET}"
     echo "${YELLOW}     launch${RESET}"
     echo "${CYAN}  This places you in a persistent Herdr workspace.${RESET}"
 else
