@@ -89,26 +89,33 @@ else
 fi
 
 DOTFILES_REPO="https://github.com/${GH_USER}/dotfiles"
-DOTFILES_REPO_SSH="git@github.com:${GH_USER}/dotfiles.git"
 
 # ── Step 2: Dotfiles repo ──────────────────────────────────────────────────────
+# HTTPS only: gh already sets up a git credential helper on login, so this
+# works without requiring an SSH key to be registered on the account.
 step "Dotfiles repo"
 if [ -d "$DOTFILES_DIR/.git" ]; then
-  ok "Repo already cloned at ${DOTFILES_DIR} — pulling latest"
-  git -C "$DOTFILES_DIR" pull --ff-only
+  ok "Repo already cloned at ${DOTFILES_DIR}"
+  if ! git -C "$DOTFILES_DIR" rev-parse --verify -q HEAD >/dev/null; then
+    warn "No commits yet — skipping pull (this run will create the first commit)"
+  elif ! git -C "$DOTFILES_DIR" rev-parse --abbrev-ref -q '@{u}' >/dev/null 2>&1; then
+    warn "No upstream tracking branch yet — skipping pull"
+  else
+    info "Pulling latest"
+    git -C "$DOTFILES_DIR" pull --ff-only
+  fi
 else
   if gh repo view "${GH_USER}/dotfiles" &>/dev/null 2>&1; then
     ok "Found existing repo ${DOTFILES_REPO}"
-    git clone "$DOTFILES_REPO_SSH" "$DOTFILES_DIR" 2>/dev/null || \
-      git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
+    git clone "$DOTFILES_REPO" "$DOTFILES_DIR"
   else
     warn "No repo found at ${DOTFILES_REPO}"
     read -rp "  Create it now? [Y/n]: " CREATE
     if [[ "${CREATE:-Y}" =~ ^[Yy]$ ]]; then
       gh repo create dotfiles --private --confirm 2>/dev/null || \
         gh repo create dotfiles --private
-      git init "$DOTFILES_DIR"
-      git -C "$DOTFILES_DIR" remote add origin "$DOTFILES_REPO_SSH"
+      git init -b main "$DOTFILES_DIR"
+      git -C "$DOTFILES_DIR" remote add origin "$DOTFILES_REPO"
       ok "Created private repo and initialized ${DOTFILES_DIR}"
     else
       echo "Aborted."
