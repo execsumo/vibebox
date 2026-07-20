@@ -37,7 +37,7 @@ echo "${CYAN}==============================================${RESET}"
 # 1. Parse settings from .env file
 Username="$(get_env_value SANDBOX_USERNAME dev)"
 SandboxName="$(get_env_value SANDBOX_NAME vibebox)"
-SshPort="$(get_env_value SSH_PORT 22)"
+SshPort="$(get_env_value SANDBOX_SSH_PORT 22)"
 
 # 2. Ensure authorized_keys file exists
 AuthKeysPath="$SCRIPT_DIR/authorized_keys"

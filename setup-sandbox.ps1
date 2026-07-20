@@ -22,7 +22,7 @@ if (Test-Path $EnvPath) {
         if ($Line -match "^SANDBOX_NAME=(.*)$") {
             $SandboxName = $Matches[1].Trim()
         }
-        if ($Line -match "^SSH_PORT=(.*)$") {
+        if ($Line -match "^SANDBOX_SSH_PORT=(.*)$") {
             $SshPort = $Matches[1].Trim()
         }
     }

@@ -105,11 +105,11 @@ $EDITOR .env
 ```env
 SANDBOX_NAME=vibebox
 SANDBOX_USERNAME=dev
-SSH_PORT=22
+SANDBOX_SSH_PORT=22
 TS_AUTHKEY=tskey-auth-...   # see Step 2
 ```
 
-If you plan to run multiple sandboxes, use a different `SANDBOX_NAME` and `SSH_PORT` for each.
+If you plan to run multiple sandboxes, use a different `SANDBOX_NAME` and `SANDBOX_SSH_PORT` for each.
 
 **Optional fields** (set only if you want the feature):
 
@@ -178,7 +178,7 @@ The script builds the image, starts the stack, writes an `~/.ssh/config` alias s
 **From the Docker host (local):**
 
 ```powershell
-ssh -p <SSH_PORT> <SANDBOX_USERNAME>@127.0.0.1
+ssh -p <SANDBOX_SSH_PORT> <SANDBOX_USERNAME>@127.0.0.1
 # or just:
 ssh <SANDBOX_NAME>
 ```
@@ -191,7 +191,7 @@ Use `127.0.0.1`, not `localhost` — on Windows, `localhost` resolves to IPv6 (`
 ssh <SANDBOX_USERNAME>@<SANDBOX_NAME>
 ```
 
-Do not pass `-p <SSH_PORT>` for remote connections. That port only remaps host-local access; over Tailscale, the container's sshd is always on port 22.
+Do not pass `-p <SANDBOX_SSH_PORT>` for remote connections. That port only remaps host-local access; over Tailscale, the container's sshd is always on port 22.
 
 ---
 
@@ -318,7 +318,7 @@ Give each sandbox its own `.env` values:
 ```env
 SANDBOX_NAME=client-a
 SANDBOX_USERNAME=dev
-SSH_PORT=2222
+SANDBOX_SSH_PORT=2222
 ```
 
 This namespaces container names, Docker volumes, the Tailscale hostname, and the backup folder:

@@ -24,7 +24,7 @@ services:
     ports:
       # Secure local backup: Bind host port 22 to container port 22 on localhost
       # (Note: Will conflict if Windows native OpenSSH Server is active on port 22)
-      - "127.0.0.1:${SSH_PORT:-22}:22"
+      - "127.0.0.1:${SANDBOX_SSH_PORT:-22}:22"
     healthcheck:
       test: ["CMD", "tailscale", "status", "--peers=false"]
       interval: 30s
