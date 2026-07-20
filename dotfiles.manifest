@@ -23,7 +23,13 @@ file|.claude/CLAUDE.md|Claude Code global CLAUDE.md (.claude/CLAUDE.md)
 dir|.claude/commands|Claude Code commands (.claude/commands/)
 
 # Codex
-dir|.codex|Codex config dir (.codex/)
+# Note: ~/.codex is a large runtime-state dir, not just config — it holds
+# auth.json (API key + OAuth tokens) and 100s of MB of bundled plugin
+# binaries. Only known-safe config files are listed individually below.
+file|.codex/config.toml|Codex config (.codex/config.toml)
+file|.codex/AGENTS.md|Codex agents config (.codex/AGENTS.md)
+file|.codex/RTK.md|Codex RTK config (.codex/RTK.md)
+file|.codex/hooks.json|Codex hooks config (.codex/hooks.json)
 
 # Antigravity (agy)
 file|.gemini/antigravity-cli/settings.json|Antigravity settings (.gemini/antigravity-cli/settings.json)
@@ -32,20 +38,25 @@ file|.gemini/antigravity-cli/mcp_config.json|Antigravity MCP config (.gemini/ant
 dir|.gemini/antigravity-cli/skills|Antigravity skills (.gemini/antigravity-cli/skills/)
 
 # Herdr
-dir|.config/herdr|Herdr config dir (.config/herdr/)
+# Note: ~/.config/herdr also holds logs, unix sockets, cached release notes,
+# and live UI session state — not just config. Only the config file itself
+# is tracked; everything else stays local.
+file|.config/herdr/config.toml|Herdr config (.config/herdr/config.toml)
 
 # Pi coding agent
-# Note: ~/.pi/agent/ holds Pi's config and state (auth included). Override the
+# Note: ~/.pi/agent/ holds Pi's config and state (auth included). Only the
+# known-safe extension file is tracked; the rest stays local. Override the
 # location with PI_CODING_AGENT_DIR if you want state kept out of your dotfiles.
-dir|.pi|Pi config dir (.pi/)
+file|.pi/agent/extensions/superset-hooks.ts|Pi superset hooks (.pi/agent/extensions/superset-hooks.ts)
 
 # RTK (Rust Token Killer)
 dir|.config/rtk|RTK config dir (.config/rtk/)
 
 # Hermes Agent
-# Note: ~/.hermes also holds the cloned source tree, auth and sessions — not just
-# config. Symlinking it to your dotfiles repo shares all of that across machines.
-dir|.hermes|Hermes Agent config dir (.hermes/)
+# ~/.hermes is its own git repo with its own remote (auth and sessions
+# included) — it manages its own sync. Nesting it here via mv+symlink makes
+# git record a submodule gitlink instead of real content, so it silently
+# pushes as an empty dir on clone. Deliberately not tracked as a dotfile.
 
 # codeburn
 dir|.config/codeburn|codeburn config dir (.config/codeburn/)
