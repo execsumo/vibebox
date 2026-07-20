@@ -501,7 +501,24 @@ codegraph install
 — so a build-time run would never reach your user. Running it inside the container writes
 into the volume instead, which means it **survives rebuilds**.
 
-Indexing is per-project: run `codegraph` in a repo to build its `.codegraph/` index.
+**Using it.** Indexing is per-project — `cd` into a repo first:
+
+```bash
+codegraph init             # build this project's .codegraph/ index
+codegraph status           # index stats: files, nodes, edges, freshness
+codegraph query <symbol>   # find a symbol (also: explore, node, callers, impact)
+```
+
+Your agents reach the same index through the MCP server `onboard` registered, so you rarely
+need these by hand.
+
+> **Bare `codegraph` re-runs the installer.** With no arguments it always enters the agent
+> install flow — by upstream design, it neither detects an existing install nor shows
+> status. `codegraph status` is the view you want.
+
+**Upgrading:** use `update`, not `codegraph upgrade`. The bundle lives in `/opt/codegraph`,
+root-owned so every user can read it, which means the self-upgrade path fails with a
+permission error. `update` re-runs the installer under `sudo` with the right paths.
 
 ---
 

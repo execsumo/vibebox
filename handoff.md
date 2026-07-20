@@ -44,6 +44,25 @@ RUN (curl -fsSL https://example.com/install.sh | bash && \
      chmod +x /usr/local/bin/toolname 2>/dev/null) || echo "ToolName setup skipped"
 ```
 
+> **The `cp` only works for self-contained single-file binaries** (rtk, herdr, hermes, agy).
+> If the installer drops a *bundle* — a launcher script plus a runtime and libs — copying
+> the launcher out of the bundle severs the relative path it uses to find its own runtime.
+> CodeGraph is the cautionary example: its launcher resolves the bundle relative to its
+> symlink-resolved path, so the `cp` above left it exec'ing a nonexistent `/usr/local/node`.
+>
+> For bundles, use the installer's own destination env vars and let it create the symlink.
+> Put the bundle somewhere world-readable: run as root, the default `~/.foo` lands under
+> `/root` (mode 700) and is invisible to the sandbox user. CodeGraph, worked:
+>
+> ```dockerfile
+> RUN (curl -fsSL https://.../install.sh | \
+>        env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
+>      chmod -R a+rX /opt/codegraph) || echo "CodeGraph setup skipped"
+> ```
+>
+> The build-time check (step 9b) runs `<tool> --version`, not just `command -v`, precisely
+> because a broken launcher still exists and is executable.
+
 ### apt package
 Add to the existing `apt-get install -y` block (step 1).
 
@@ -80,6 +99,9 @@ echo "N/N Updating ToolName..."
 (curl -fsSL https://example.com/install.sh | bash && (sudo cp ~/.local/bin/toolname /usr/local/bin/toolname 2>/dev/null || true)) || true
 ```
 
+The same bundle caveat as the install step applies — mirror whatever the Dockerfile does, or
+the update will re-break a working install. CodeGraph's update step is the worked example.
+
 ---
 
 ## Dotfiles
@@ -109,7 +131,7 @@ If the tool's config directory is unknown, add a `dir` entry for the most likely
 | RTK | install script | `/usr/local/bin/rtk` | re-run installer (update step 6) | `.config/rtk/` |
 | Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
 | Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 10) | state under `.hermes/webui/` |
-| CodeGraph | install script | `/usr/local/bin/codegraph` | re-run installer | — (per-project `.codegraph/`) |
+| CodeGraph | install script (bundle in `/opt/codegraph`) | `/usr/local/bin/codegraph` → symlink into bundle | re-run installer via `update` (not `codegraph upgrade`) | — (per-project `.codegraph/`) |
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
 | GitHub CLI | apt (official repo) | `/usr/bin/gh` | apt upgrade | — |
