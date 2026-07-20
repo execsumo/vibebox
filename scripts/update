@@ -29,7 +29,11 @@ echo "8/10 Updating Hermes Agent..."
 (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && (sudo cp ~/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true)) || true
 echo ""
 echo "9/10 Updating CodeGraph..."
-(curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh && (sudo cp ~/.local/bin/codegraph /usr/local/bin/codegraph 2>/dev/null || true)) || true
+# Must mirror the Dockerfile: the launcher resolves its bundle relative to itself, so
+# it stays a symlink into /opt/codegraph rather than being copied into /usr/local/bin.
+(curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
+   sudo env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
+ sudo chmod -R a+rX /opt/codegraph) || true
 echo "    Re-run 'codegraph install' if you added or removed agent CLIs."
 echo ""
 echo "10/10 Updating Hermes WebUI..."

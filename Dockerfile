@@ -126,16 +126,25 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
 # (e.g. ~/.claude.json), and $HOME is a persisted volume that masks image content on
 # rebuilds — so a build-time run as root would not reach the sandbox user. Run it once
 # inside the container instead (documented in README).
-RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh && \
-     (cp /root/.local/bin/codegraph /usr/local/bin/codegraph 2>/dev/null || true) && \
-     chmod +x /usr/local/bin/codegraph 2>/dev/null) || echo "CodeGraph setup skipped"
+# Unlike the single-file binaries above, codegraph is a Node bundle whose launcher
+# resolves the bundle relative to its own symlink-resolved path. Copying the launcher
+# into /usr/local/bin severs that link, leaving it to exec a nonexistent /usr/local/node.
+# So let the installer place both itself, via its own env vars: the bundle in /opt
+# (world-readable) rather than the default ~/.codegraph, which as root lands under
+# /root (mode 700) and is unreadable by the sandbox user.
+RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
+       env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
+     chmod -R a+rX /opt/codegraph) || echo "CodeGraph setup skipped"
 
 # 9b. Verify installs so a build cannot silently succeed with tooling missing.
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
     for t in claude codex bun node gh; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
-    for t in agy herdr rtk hermes codegraph codeburn pi; do command -v "$t" >/dev/null || echo "WARNING: $t not installed (non-fatal)"; done; \
+    for t in agy herdr rtk hermes codegraph codeburn pi; do \
+      if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
+      elif ! "$t" --version >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
+    done; \
     [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"
 
 # Build argument to customize the SSH username (defaults to dev)
