@@ -5,8 +5,16 @@
 set -e
 
 # Resolve the sandbox user's home (UID 1000) regardless of the configured username.
-KEYDIR="$(getent passwd 1000 | cut -d: -f6)/.vibebox/ssh"
+VIBEBOX_DIR="$(getent passwd 1000 | cut -d: -f6)/.vibebox"
+KEYDIR="$VIBEBOX_DIR/ssh"
 mkdir -p "$KEYDIR"
+
+# mkdir above runs as root, so .vibebox lands root-owned — but `onboard` writes its
+# marker files (rtk-initialized, codegraph-installed) there as the sandbox user, and
+# the failed redirect aborts onboard under `set -e`. Chown the directory itself only:
+# ssh/ must stay root-owned, since sshd requires root-owned mode-600 host keys.
+# Runs every boot, so existing volumes with the old root-owned dir self-heal.
+chown 1000:1000 "$VIBEBOX_DIR"
 
 # Runs as root, so the generated private keys are root-owned mode 600 — the
 # standard, always-accepted case for sshd HostKey files.

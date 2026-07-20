@@ -167,8 +167,11 @@ else
   done
 
   if [ ${#RTK_WIRED[@]} -gt 0 ]; then
-    mkdir -p "$(dirname "$RTK_MARKER")"
-    date -u '+wired %Y-%m-%d' > "$RTK_MARKER"
+    # Marker writing is bookkeeping — never let it abort the run (set -e) and skip
+    # the steps below. A missing marker only costs a redundant re-run next time.
+    mkdir -p "$(dirname "$RTK_MARKER")" 2>/dev/null || true
+    date -u '+wired %Y-%m-%d' > "$RTK_MARKER" 2>/dev/null \
+      || warn "Could not write marker ${RTK_MARKER} (wiring itself succeeded)"
     ok "RTK hook installed for: ${RTK_WIRED[*]}"
   fi
   if [ ${#RTK_FAILED[@]} -gt 0 ]; then
@@ -200,8 +203,10 @@ elif [ -f "$CODEGRAPH_MARKER" ]; then
   echo "    Re-run with: codegraph install"
 else
   if codegraph install; then
-    mkdir -p "$(dirname "$CODEGRAPH_MARKER")"
-    date -u '+wired %Y-%m-%d' > "$CODEGRAPH_MARKER"
+    # Bookkeeping only — see the RTK marker note above.
+    mkdir -p "$(dirname "$CODEGRAPH_MARKER")" 2>/dev/null || true
+    date -u '+wired %Y-%m-%d' > "$CODEGRAPH_MARKER" 2>/dev/null \
+      || warn "Could not write marker ${CODEGRAPH_MARKER} (install itself succeeded)"
     ok "CodeGraph registered with the installed agent CLIs"
     echo "    Index a project by running 'codegraph' inside its directory."
   else
