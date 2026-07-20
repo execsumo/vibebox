@@ -160,6 +160,13 @@ RUN mkdir /var/run/sshd && \
     sed -i 's/#KbdInteractiveAuthentication yes/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config && \
     # Disable StrictModes to prevent SSH from rejecting host-mounted authorized_keys files
     echo "StrictModes no" >> /etc/ssh/sshd_config && \
+    # Let sshd read ~/.ssh/environment, written each boot by the entrypoint. This is the
+    # only hook that reaches every session type — login, interactive, `ssh vibebox <cmd>`,
+    # and Remote-SSH — and it is shell-agnostic, unlike .zshrc/.bashrc (which are user
+    # dotfiles restored from the host manifest, so edits there do not survive).
+    # The usual objection (a user setting LD_PRELOAD to escalate) is moot here: the
+    # sandbox user already has passwordless sudo, configured below.
+    echo "PermitUserEnvironment yes" >> /etc/ssh/sshd_config && \
     # Host keys live in the persisted home volume (generated once by the entrypoint) so the
     # sandbox keeps a stable identity across rebuilds without persisting all of /etc.
     printf 'HostKey /home/%s/.vibebox/ssh/ssh_host_ed25519_key\nHostKey /home/%s/.vibebox/ssh/ssh_host_rsa_key\n' "${USERNAME}" "${USERNAME}" >> /etc/ssh/sshd_config

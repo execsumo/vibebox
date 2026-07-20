@@ -119,6 +119,8 @@ HERMES_WEBUI_PASSWORD=your-password # required only if you want the webui (see S
 ANTHROPIC_API_KEY=sk-ant-...        # optional; agents auth interactively by default
 ```
 
+Any other variable you add to `.env` reaches the sandbox environment too — see [API Keys](#api-keys).
+
 See the [Reference](#reference) section for all config options (base image, tool versions, resource limits, backup retention).
 
 ### Step 2 — Get a Tailscale auth key (Required)
@@ -394,11 +396,17 @@ The core toolchain intentionally tracks `latest` — backups rewind the persiste
 
 None are required. Every bundled agent (Claude Code, Codex, Antigravity, Herdr, Hermes, Pi) authenticates interactively inside the container via its own flow — `claude auth`, `codex login`, `gh auth`, `pi` then `/login`.
 
-If you would rather a tool read a key from the environment, add it to `.env` and it is picked up on container start. For example, Pi honours `ANTHROPIC_API_KEY` when set:
+If you would rather a tool read a key from the environment, add it to `.env` and rebuild. For example, Pi honours `ANTHROPIC_API_KEY` when set:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-...
 ```
+
+Any variable works, not a fixed list — `.env` is loaded wholesale into the sandbox, and the entrypoint republishes it to SSH sessions through `~/.ssh/environment` (sshd does not inherit the container's environment on its own). So `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or anything else you add is visible to interactive shells, `ssh vibebox <cmd>`, and Remote-SSH alike.
+
+Two caveats. Session-scoped variables (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, …) are skipped — the shell owns those, and exporting the container's copies would break logins. And the file is rewritten on every container start, so a key is picked up by `docker compose up -d` and disappears once you delete it from `.env` and restart.
+
+The file is mode `0600` and owned by the sandbox user. Note that this puts your keys on the persisted home volume, so they land in backup archives — see [Security Notes](#security-notes).
 
 ### Security Notes
 

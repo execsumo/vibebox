@@ -90,6 +90,13 @@ services:
     depends_on:
       tailscale:
         condition: service_healthy
+    # Everything in .env lands in the container environment, and the entrypoint
+    # forwards it to SSH sessions via ~/.ssh/environment — so an API key added to
+    # .env is referenceable from shells and agents without touching this file.
+    # Deliberately unfiltered: this is a single-user sandbox, and guessing which
+    # vars a tool wants is how the previous explicit list silently dropped keys.
+    env_file:
+      - .env
     environment:
       - SANDBOX_NAME=${SANDBOX_NAME:-vibebox}
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}

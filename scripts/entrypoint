@@ -21,6 +21,36 @@ chown 1000:1000 "$VIBEBOX_DIR"
 [ -f "$KEYDIR/ssh_host_ed25519_key" ] || ssh-keygen -q -t ed25519 -f "$KEYDIR/ssh_host_ed25519_key" -N ""
 [ -f "$KEYDIR/ssh_host_rsa_key" ]     || ssh-keygen -q -t rsa -b 4096 -f "$KEYDIR/ssh_host_rsa_key" -N ""
 
+# Forward the container environment (everything from .env, via compose env_file) to
+# SSH sessions. sshd does not inherit PID 1's environment, so without this a key set
+# in .env is invisible to every shell in the box. Paired with PermitUserEnvironment
+# in the Dockerfile. Rewritten from scratch each boot, so a key deleted from .env
+# actually disappears instead of lingering in the persisted home volume.
+SANDBOX_HOME="$(getent passwd 1000 | cut -d: -f6)"
+SSH_ENV_FILE="$SANDBOX_HOME/.ssh/environment"
+mkdir -p "$SANDBOX_HOME/.ssh"
+: > "$SSH_ENV_FILE"
+# Written as root but read by sshd as the sandbox user: 0600 keeps API keys out of
+# reach of anything else, and the chown is what makes them readable at all.
+chmod 600 "$SSH_ENV_FILE"
+chown 1000:1000 "$SSH_ENV_FILE"
+while IFS= read -r -d '' kv; do
+  name="${kv%%=*}"
+  value="${kv#*=}"
+  case "$name" in
+    # Session-scoped, not configuration. sshd and the login shell set these per
+    # session; exporting the entrypoint's copies would point every login at root's
+    # HOME and pin PATH to the build-time value.
+    PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|SHLVL|TERM|MAIL|HOSTNAME|_) continue ;;
+  esac
+  # The file format is one NAME=value per line with no quoting or continuations,
+  # so an embedded newline would silently corrupt every entry after it.
+  case "$value" in
+    *$'\n'*) echo "skipping \$$name in ssh environment (value contains a newline)"; continue ;;
+  esac
+  printf '%s=%s\n' "$name" "$value" >> "$SSH_ENV_FILE"
+done < <(env -0)
+
 # Start Hermes WebUI as the sandbox user if installed (daemonized via ctl.sh, so
 # sshd startup is not blocked; failure is non-fatal). Binds 0.0.0.0 so the
 # hermes-ts tailscale sidecar can proxy https://<HERMES_HOSTNAME>.<tailnet>.ts.net
