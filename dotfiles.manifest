@@ -53,10 +53,14 @@ file|.pi/agent/extensions/superset-hooks.ts|Pi superset hooks (.pi/agent/extensi
 dir|.config/rtk|RTK config dir (.config/rtk/)
 
 # Hermes Agent
-# ~/.hermes is its own git repo with its own remote (auth and sessions
-# included) — it manages its own sync. Nesting it here via mv+symlink makes
-# git record a submodule gitlink instead of real content, so it silently
-# pushes as an empty dir on clone. Deliberately not tracked as a dotfile.
+# Note: if ~/.hermes is (or becomes) its own git repo with its own remote,
+# disconnect it first (move its .git aside) before selecting this — nesting
+# a live git repo here makes git record a submodule gitlink instead of real
+# content, so it silently pushes as an empty dir on clone. ~/.hermes ships
+# its own thorough .gitignore (auth.json, whatsapp/ sessions, state.db,
+# sessions/, checkpoints/, caches, logs, etc.) which travels with the
+# directory and keeps that runtime/auth state out of this repo automatically.
+dir|.hermes|Hermes Agent config dir (.hermes/)
 
 # codeburn
 dir|.config/codeburn|codeburn config dir (.config/codeburn/)

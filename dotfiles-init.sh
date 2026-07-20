@@ -189,7 +189,12 @@ for i in "${!ITEMS[@]}"; do
   mkdir -p "$(dirname "$DEST")"
 
   if [ "$TYPE" = "dir" ]; then
-    if [ -d "$SRC" ] && [ ! -L "$SRC" ]; then
+    if [ -e "$SRC/.git" ]; then
+      warn "${REL}/ — contains its own .git (nested repo), skipping"
+      info "Nesting a live git repo here would make git record a submodule"
+      info "gitlink instead of real content, silently pushing an empty dir."
+      info "Disconnect it first (move ${SRC}/.git aside) if you want it tracked."
+    elif [ -d "$SRC" ] && [ ! -L "$SRC" ]; then
       mv "$SRC" "$DEST"
       ln -sf "$DEST" "$SRC"
       ok "${REL}/ — moved to repo, symlinked"
