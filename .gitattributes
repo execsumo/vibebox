@@ -6,4 +6,3 @@ Dockerfile text eol=lf
 *.yml text eol=lf
 # In-container commands (extensionless) and the shared dotfiles manifest.
 scripts/* text eol=lf
-dotfiles.manifest text eol=lf

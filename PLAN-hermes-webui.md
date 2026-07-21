@@ -31,7 +31,7 @@ tailnet ──ssh────> tailscale (node "vibebox", unchanged)
 Clone + venv go to **`/opt/hermes-webui` in the image** (Dockerfile), not the home volume via `onboard`:
 - Repo philosophy (docker-compose.yml:69-73): only `/home` is a pet; "everything durable belongs in the Dockerfile; a rebuild is the way to change the rest".
 - Upstream warns webui/agent version skew causes breakage ("upgrade both together") — image install means one rebuild updates hermes + webui in lockstep.
-- Mutable state is unaffected: PID/log/sessions all live in `~/.hermes/` (persisted volume, already in `dotfiles.manifest`).
+- Mutable state is unaffected: PID/log/sessions all live in `~/.hermes/` (persisted volume, already tracked in your dotfiles manifest).
 
 hermes-webui needs Python 3.11+ — Ubuntu 24.04 ships 3.12, and `python3`/`python3-venv`/`python3-pip` are already in apt step 1. No new system deps.
 
@@ -122,7 +122,7 @@ echo "10/10 Updating Hermes WebUI..."
 ### 7. Docs
 - **`README.md`**: add Hermes WebUI to the coding-tools table; new short section "Hermes WebUI (https://hermes.<tailnet>.ts.net)" covering: auto-start on boot, `ctl.sh status|logs|restart` inside the box, `HERMES_WEBUI_PASSWORD`, tailnet HTTPS-certs prerequisite (already enabled on this tailnet — excali uses it), and ~10 s first-visit delay while the LetsEncrypt cert provisions.
 - **`handoff.md`**: add a row to the installed-tools reference (`Hermes WebUI | git clone + venv (tolerated) | /opt/hermes-webui | git pull + pip (update step 10) | state under .hermes/`).
-- No `dotfiles.manifest` change — webui state lives under `~/.hermes/`, already covered by the existing `dir|.hermes` entry.
+- No dotfiles-manifest change — webui state lives under `~/.hermes/`, already covered by the existing `dir|.hermes` entry.
 
 ### 8. Save plan copy (user request)
 Copy this plan into the repo as `d:\Coding\vibebox\PLAN-hermes-webui.md` as the first implementation step.
