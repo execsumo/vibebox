@@ -12,10 +12,10 @@ This document explains where each piece lives and what to touch when you add a n
 | `scripts/onboard` | Per-user config step, if the tool has one (see below) |
 | `scripts/update` | Add an update step for the tool (real file, not a heredoc) |
 | `.env.example` | API key variable (if the tool needs one) |
-| `dotfiles.manifest` | One line per new dotfile path (if the tool has config) |
+| `~/.dotfiles/dotfiles.manifest` | One line per new dotfile path (if the tool has config) — lives in your dotfiles repo, not here |
 | `README.md` | Coding tools table + dotfiles section + API Keys section (if needed) |
 
-The in-container commands (`onboard`, `backup`, `update`, `launch`) and the `entrypoint` are real files in `scripts/`, `COPY`'d to `/usr/local/bin` by the Dockerfile — edit them directly. Dotfile paths live in a single `dotfiles.manifest` at the repo root; both `dotfiles-init.sh` (host) and `onboard` (container) read it, so there is only one list to maintain.
+The in-container commands (`onboard`, `backup`, `update`, `launch`) and the `entrypoint` are real files in `scripts/`, `COPY`'d to `/usr/local/bin` by the Dockerfile — edit them directly. Dotfile paths are **not** in this repo any more: they live in the manifest inside your own dotfiles repo, managed by [dotter](https://github.com/execsumo/dotter).
 
 If a tool is one you depend on daily, add it to the hard-fail loop in the Dockerfile's step 9b verification (`for t in claude codex bun node gh`); optional agents go in the warn loop. Anything installed with a tolerated (`|| echo ...`) step belongs in the warn loop — a hard-fail check on a tolerated install just relocates the build break.
 
@@ -106,15 +106,43 @@ the update will re-break a working install. CodeGraph's update step is the worke
 
 ## Dotfiles
 
-Supported dotfiles live in a single `dotfiles.manifest` at the repo root. `dotfiles-init.sh` (runs on the source machine) and `onboard` (runs inside the container, reading the copy at `/usr/local/share/vibebox/dotfiles.manifest`) both parse it — **one list, no hand-syncing.**
+Vibebox does not own dotfiles logic any more. It is handled by
+[dotter](https://github.com/execsumo/dotter), a standalone tool installed into
+the image by the Dockerfile. `onboard` calls it:
 
-**Add one line** per new config path. Format is `type|relpath|label`:
+```bash
+dotfiles init --repo "https://github.com/${GH_USER}/dotfiles"
+dotfiles link
+```
+
+The manifest lives in **your dotfiles repo** (`~/.dotfiles/dotfiles.manifest`),
+not in this one — so it is editable from any machine, not just a designated host.
+
+**To track a new tool's config**, run this from wherever you are:
+
+```bash
+dotfiles add ~/.config/toolname/config.toml
+dotfiles sync
+```
+
+That appends the manifest entry, moves the file into the repo, symlinks it back,
+and commits — no need to edit anything in vibebox.
+
+Manifest format is `type|relpath|label`:
 
 - `type` = `file` (symlinked individually) or `dir` (symlinked whole)
 - `relpath` = path relative to `$HOME`
-- `label` = description shown in the `dotfiles-init.sh` checklist
+- `label` = human-readable description
 
-If the tool's config directory is unknown, add a `dir` entry for the most likely location (`~/.config/toolname/` is the XDG-standard default for modern CLIs) and note it in the README.
+**Prefer `file` entries.** A `dir` entry tracks whatever the owning tool writes
+there later — that has leaked a live API key plus 250MB of vendored binaries in
+one case, and logs plus unix sockets in another. If a tool's config directory is
+unknown, find its actual config file rather than defaulting to a `dir` entry for
+`~/.config/toolname/`. `dotfiles add` audits directories and makes you confirm,
+but that audit is a snapshot, not a guarantee.
+
+**Bumping the tool version:** the Dockerfile pins it via `ARG DOTTER_REF=main`.
+Pin a tag or SHA there if you want reproducible builds.
 
 ---
 

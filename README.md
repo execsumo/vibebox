@@ -536,103 +536,53 @@ permission error. `update` re-runs the installer under `sudo` with the right pat
 
 ## Dotfiles
 
-### Setting up dotfiles from your main machine
+Dotfiles are **not** managed by vibebox. They are handled by
+[dotter](https://github.com/execsumo/dotter) — a standalone tool that works the
+same way on your laptop, a VPS, or inside a vibebox container. Vibebox is just
+one consumer of it.
 
-Run `dotfiles-init.sh` once on the machine whose config you want to use as the source of truth:
+`onboard` runs exactly two commands for its dotfiles step:
 
 ```bash
-chmod +x dotfiles-init.sh
-./dotfiles-init.sh
+dotfiles init --repo "https://github.com/<you>/dotfiles"
+dotfiles link
 ```
 
-The script will authenticate with GitHub CLI, create or clone your `dotfiles` repo, show an interactive checklist of supported files, move selected files into `~/.dotfiles/`, symlink them back to their original locations, then commit and push. Any Vibebox running `onboard` will clone the same repo and mirror the same symlinks.
+Which is the same thing you would run on any other machine.
 
-### Supported dotfiles
+### What lives where
 
-The repo mirrors your home directory exactly. The `onboard` script links these files if present:
-
-**Shell & editor**
-
-| File | Purpose |
+| Thing | Owner |
 |---|---|
-| `.zshrc` | Zsh config — aliases, prompt, plugins, `$PATH` additions |
-| `.bashrc` | Bash config |
-| `.gitconfig` | Git aliases, diff settings, default branch |
-| `.tmux.conf` | tmux key bindings and appearance |
-| `.vimrc` | Vim settings |
-| `.nanorc` | Nano syntax highlighting |
-| `.editorconfig` | Editor-agnostic indent/charset rules |
-| `.curlrc` | Default curl flags |
-| `.wgetrc` | Default wget flags |
+| Which files are tracked (the manifest) | Your `dotfiles` repo, at `dotfiles.manifest` |
+| The git/symlink mechanics | [dotter](https://github.com/execsumo/dotter) |
+| Cloning + linking on a fresh container | vibebox's `onboard`, by calling `dotfiles` |
 
-**Claude Code**
+There is no source-of-truth machine any more. Add a file from wherever you are:
 
-| File | Purpose |
-|---|---|
-| `.claude/settings.json` | User-level Claude Code settings |
-| `.claude/CLAUDE.md` | Global instructions for all projects |
-| `.claude/commands/` _(dir)_ | Custom slash commands |
+```bash
+dotfiles add ~/.config/some-tool/config.toml   # move in, symlink back, commit
+dotfiles sync                                  # pull, then push
+dotfiles status                                # what is linked here
+```
 
-**Codex**
+The tracked-file list is no longer duplicated in this README — read your own
+manifest instead, which carries a label and a rationale comment per entry:
 
-| File | Purpose |
-|---|---|
-| `.codex/` _(dir)_ | Full Codex config directory |
+```bash
+cat ~/.dotfiles/dotfiles.manifest
+```
 
-**Antigravity (`agy`)**
+> **Prefer individual files over whole directories.** A `dir|` entry tracks
+> whatever the owning tool writes there *later* — we have had that leak a live
+> API key and 250MB of vendored binaries in one case, and logs plus unix sockets
+> in another. `dotfiles add` audits a directory and makes you confirm, but the
+> audit is a snapshot, not a guarantee. See dotter's README for the full list of
+> safety behaviours.
 
-| File | Purpose |
-|---|---|
-| `.gemini/antigravity-cli/settings.json` | Antigravity settings |
-| `.gemini/antigravity-cli/keybindings.json` | Custom keybindings |
-| `.gemini/antigravity-cli/mcp_config.json` | Global MCP config |
-| `.gemini/antigravity-cli/skills/` _(dir)_ | Agent skills |
-
-**Herdr**
-
-| File | Purpose |
-|---|---|
-| `.config/herdr/` _(dir)_ | Herdr config directory |
-
-**Pi (`pi`)**
-
-| File | Purpose |
-|---|---|
-| `.pi/` _(dir)_ | Pi config directory |
-
-Pi keeps config *and* state (auth, sessions) under `~/.pi/agent/`, so linking it shares
-auth across machines. Set `PI_CODING_AGENT_DIR` to relocate that state if you would
-rather keep it machine-local.
-
-**RTK**
-
-| File | Purpose |
-|---|---|
-| `.config/rtk/` _(dir)_ | RTK config directory (`config.toml`) |
-
-RTK's per-agent hooks live in each agent's own config (linked above), not here — so
-linking `.config/rtk/` shares your RTK settings, and `onboard` re-installs the hooks.
-
-**Hermes Agent**
-
-| File | Purpose |
-|---|---|
-| `.hermes/` _(dir)_ | Hermes config directory |
-
-Note that `~/.hermes/` also holds Hermes' cloned source tree, auth, and sessions — not
-just config. Linking it shares all of that across machines; skip it in the
-`dotfiles-init.sh` checklist if you would rather keep auth machine-local.
-
-**codeburn**
-
-| File | Purpose |
-|---|---|
-| `.config/codeburn/` _(dir)_ | Spend config: `config.json` (currency, model aliases), `guard.json` (budget caps) |
-
-CodeGraph is deliberately absent — its state is per-project (`.codegraph/` and an optional
-`codegraph.json` at the project root), so it belongs in each repo, not your dotfiles.
-
-Only files that exist in your repo are linked — the rest are left alone.
+CodeGraph is deliberately absent from the manifest — its state is per-project
+(`.codegraph/` and an optional `codegraph.json` at the project root), so it
+belongs in each repo, not your dotfiles.
 
 **Cross-platform tip:** guard macOS- or Linux-specific config behind an OS check so the same dotfiles work everywhere:
 

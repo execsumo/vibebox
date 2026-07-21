@@ -10,8 +10,6 @@ step() { echo -e "\n${CYAN}==>${RESET} $*"; }
 ok()   { echo -e "${GREEN}✓${RESET} $*"; }
 warn() { echo -e "${YELLOW}!${RESET} $*"; }
 
-MANIFEST="/usr/local/share/vibebox/dotfiles.manifest"
-
 echo ""
 echo "================================================"
 echo "           Vibebox First-Time Setup"
@@ -53,70 +51,27 @@ else
 fi
 
 # ── 3. Dotfiles ───────────────────────────────────────────────────────────────
+# Delegated to the standalone `dotfiles` tool (https://github.com/execsumo/dotter).
+# vibebox is just one consumer of it: the manifest, the git mechanics, and the
+# symlinking all live there and work identically on a laptop or a VPS. The same
+# two commands below are what you would run anywhere else.
 step "Dotfiles"
-DOTFILES_DIR="$HOME/.dotfiles"
-DOTFILES_REPO="https://github.com/${GH_USER}/dotfiles"
 
-if [ -d "$DOTFILES_DIR/.git" ]; then
-  ok "Dotfiles already installed at ${DOTFILES_DIR}"
+if ! command -v dotfiles &>/dev/null; then
+  warn "dotfiles tool not installed — skipping (rebuild the image to install it)"
 else
+  DOTFILES_REPO="https://github.com/${GH_USER}/dotfiles"
   read -rp "  Dotfiles repo [${DOTFILES_REPO}]: " INPUT_REPO
   REPO="${INPUT_REPO:-$DOTFILES_REPO}"
 
-  if gh repo view "${GH_USER}/dotfiles" &>/dev/null 2>&1 || \
-     git ls-remote "$REPO" &>/dev/null 2>&1; then
-    git clone "$REPO" "$DOTFILES_DIR"
-
-    # Supported dotfiles come from the shared manifest (mirrors dotfiles-init.sh).
-    # Files are symlinked individually; directories are symlinked whole.
-    SUPPORTED_FILES=()
-    SUPPORTED_DIRS=()
-    if [ -f "$MANIFEST" ]; then
-      while IFS='|' read -r TYPE REL _; do
-        case "$TYPE" in
-          file) SUPPORTED_FILES+=("$REL") ;;
-          dir)  SUPPORTED_DIRS+=("$REL") ;;
-        esac
-      done < <(grep -vE '^[[:space:]]*(#|$)' "$MANIFEST")
-    else
-      warn "Dotfiles manifest not found at ${MANIFEST}; skipping dotfile linking"
-    fi
-
-    LINKED=()
-
-    for f in "${SUPPORTED_FILES[@]}"; do
-      SRC="$DOTFILES_DIR/$f"
-      DEST="$HOME/$f"
-      if [ -f "$SRC" ]; then
-        mkdir -p "$(dirname "$DEST")"
-        [ -e "$DEST" ] && ! [ -L "$DEST" ] && mv "$DEST" "${DEST}.bak"
-        ln -sf "$SRC" "$DEST"
-        LINKED+=("$f")
-      fi
-    done
-
-    for d in "${SUPPORTED_DIRS[@]}"; do
-      SRC="$DOTFILES_DIR/$d"
-      DEST="$HOME/$d"
-      if [ -d "$SRC" ]; then
-        mkdir -p "$(dirname "$DEST")"
-        [ -e "$DEST" ] && ! [ -L "$DEST" ] && mv "$DEST" "${DEST}.bak"
-        ln -sf "$SRC" "$DEST"
-        LINKED+=("$d/")
-      fi
-    done
-
-    if [ ${#LINKED[@]} -gt 0 ]; then
-      ok "Linked: ${LINKED[*]}"
-    else
-      warn "No supported dotfiles found in repo (see README for expected filenames)"
-    fi
-
+  # No --yes: if the repo does not exist yet, creating it on GitHub is an
+  # outward-facing action and should stay an explicit human confirmation.
+  if dotfiles init --repo "$REPO" && dotfiles link; then
     # Re-source zshrc if we're in zsh
     [ -n "${ZSH_VERSION:-}" ] && [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
   else
-    warn "Repo ${REPO} not found or not accessible — skipping dotfiles"
-    warn "Create it at https://github.com/new or re-run 'onboard' later"
+    warn "Dotfiles step did not complete — re-run 'onboard', or debug with:"
+    warn "  dotfiles status"
   fi
 fi
 

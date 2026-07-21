@@ -196,13 +196,23 @@ RUN mkdir -p /home/${USERNAME}/.ssh && \
     chmod 700 /home/${USERNAME}/.ssh
 
 # Install the in-container commands (onboard, backup, update, launch) and the
-# entrypoint as real files from scripts/, plus the shared dotfiles manifest.
+# entrypoint as real files from scripts/.
 # Editing these is now editing a shell script — no Dockerfile heredocs.
 COPY scripts/ /usr/local/bin/
-COPY dotfiles.manifest /usr/local/share/vibebox/dotfiles.manifest
 # chmod explicitly — the execute bit does not survive a Windows/git checkout reliably.
 RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup \
              /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/entrypoint
+
+# The dotfiles tool is a standalone project; vibebox is just a consumer of it.
+# It owns the manifest format and all git/symlink mechanics, so there is no
+# vibebox-side copy of dotfiles.manifest any more — the manifest lives in the
+# user's own dotfiles repo and is fetched at onboard time.
+# Single self-contained bash script, so a plain fetch is the whole install.
+ARG DOTTER_REPO=execsumo/dotter
+ARG DOTTER_REF=main
+ADD https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles \
+    /usr/local/bin/dotfiles
+RUN chmod +x /usr/local/bin/dotfiles && dotfiles version
 
 # Expose default SSH port inside container
 EXPOSE 22
