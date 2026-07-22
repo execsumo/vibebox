@@ -13,6 +13,8 @@ $Username = "dev"
 $SandboxName = "vibebox"
 $SshPort = "22"
 $TsAuthKey = ""
+$DefaultVhdSize = ""
+$SparseVhd = ""
 $EnvPath = Join-Path $PSScriptRoot ".env"
 if (Test-Path $EnvPath) {
     $EnvContent = Get-Content $EnvPath
@@ -28,6 +30,12 @@ if (Test-Path $EnvPath) {
         }
         if ($Line -match "^TS_AUTHKEY=(.*)$") {
             $TsAuthKey = $Matches[1].Trim()
+        }
+        if ($Line -match "^defaultVhdSize=(.*)$") {
+            $DefaultVhdSize = $Matches[1].Trim()
+        }
+        if ($Line -match "^sparseVhd=(.*)$") {
+            $SparseVhd = $Matches[1].Trim()
         }
     }
 }
@@ -123,6 +131,80 @@ $Filtered.Add("    User $Username")
 $Filtered.Add("# $EndMarker")
 Set-Content -Path $SshConfigPath -Value $Filtered -Encoding ascii
 Write-Host "Configured SSH alias 'Host $SandboxName' -> 127.0.0.1:$SshPort in $SshConfigPath" -ForegroundColor Green
+
+# 4b. Configure WSL2 VHD settings in ~/.wslconfig if defaultVhdSize or sparseVhd are set.
+if (-not [string]::IsNullOrWhiteSpace($DefaultVhdSize) -or -not [string]::IsNullOrWhiteSpace($SparseVhd)) {
+    $WslConfigPath = Join-Path $HOME ".wslconfig"
+    $WslLines = @()
+    if (Test-Path $WslConfigPath) { $WslLines = @(Get-Content $WslConfigPath) }
+
+    $NewWslLines = New-Object System.Collections.Generic.List[string]
+    $InWsl2Section = $false
+    $SawWsl2Section = $false
+    $UpdatedSize = $false
+    $UpdatedSparse = $false
+
+    foreach ($Line in $WslLines) {
+        $Trimmed = $Line.Trim()
+        if ($Trimmed -match "^\[(.*)\]$") {
+            if ($Matches[1].Trim().ToLower() -eq "wsl2") {
+                $InWsl2Section = $true
+                $SawWsl2Section = $true
+            } else {
+                if ($InWsl2Section) {
+                    if (-not [string]::IsNullOrWhiteSpace($DefaultVhdSize) -and -not $UpdatedSize) {
+                        $NewWslLines.Add("defaultVhdSize=$DefaultVhdSize")
+                        $UpdatedSize = $true
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($SparseVhd) -and -not $UpdatedSparse) {
+                        $NewWslLines.Add("sparseVhd=$SparseVhd")
+                        $UpdatedSparse = $true
+                    }
+                }
+                $InWsl2Section = $false
+            }
+        }
+
+        if ($InWsl2Section) {
+            if (-not [string]::IsNullOrWhiteSpace($DefaultVhdSize) -and $Trimmed -match "^defaultVhdSize=") {
+                $NewWslLines.Add("defaultVhdSize=$DefaultVhdSize")
+                $UpdatedSize = $true
+                continue
+            }
+            if (-not [string]::IsNullOrWhiteSpace($SparseVhd) -and $Trimmed -match "^sparseVhd=") {
+                $NewWslLines.Add("sparseVhd=$SparseVhd")
+                $UpdatedSparse = $true
+                continue
+            }
+        }
+        $NewWslLines.Add($Line)
+    }
+
+    if (-not $SawWsl2Section) {
+        if ($NewWslLines.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($NewWslLines[$NewWslLines.Count - 1])) {
+            $NewWslLines.Add("")
+        }
+        $NewWslLines.Add("[wsl2]")
+        if (-not [string]::IsNullOrWhiteSpace($DefaultVhdSize)) {
+            $NewWslLines.Add("defaultVhdSize=$DefaultVhdSize")
+            $UpdatedSize = $true
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SparseVhd)) {
+            $NewWslLines.Add("sparseVhd=$SparseVhd")
+            $UpdatedSparse = $true
+        }
+    } elseif ($InWsl2Section) {
+        if (-not [string]::IsNullOrWhiteSpace($DefaultVhdSize) -and -not $UpdatedSize) {
+            $NewWslLines.Add("defaultVhdSize=$DefaultVhdSize")
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SparseVhd) -and -not $UpdatedSparse) {
+            $NewWslLines.Add("sparseVhd=$SparseVhd")
+        }
+    }
+
+    Set-Content -Path $WslConfigPath -Value $NewWslLines -Encoding utf8
+    Write-Host "Configured WSL2 VHD settings in $WslConfigPath" -ForegroundColor Green
+}
 
 # 5. Build and launch the container stack
 Write-Host ""

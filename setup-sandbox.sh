@@ -134,6 +134,89 @@ chmod 600 "$SshConfigPath"
 } >> "$SshConfigPath"
 echo "${GREEN}Configured SSH alias 'Host $SandboxName' -> 127.0.0.1:$SshPort in $SshConfigPath${RESET}"
 
+# 4b. Configure WSL2 VHD settings in ~/.wslconfig if defaultVhdSize or sparseVhd are set.
+DefaultVhdSize="$(get_env_value defaultVhdSize '')"
+SparseVhd="$(get_env_value sparseVhd '')"
+
+if [ -n "$DefaultVhdSize" ] || [ -n "$SparseVhd" ]; then
+    WslConfigPath="$HOME/.wslconfig"
+    if [ -d "/mnt/c/Users" ] && [ ! -f "$WslConfigPath" ]; then
+        WinHome="$(cmd.exe /c "echo %USERPROFILE%" 2>/dev/null | tr -d '\r' | xargs -0 wslpath 2>/dev/null || true)"
+        [ -n "$WinHome" ] && [ -d "$WinHome" ] && WslConfigPath="$WinHome/.wslconfig"
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$WslConfigPath" "$DefaultVhdSize" "$SparseVhd" << 'EOF' || true
+import sys, os
+
+config_path = sys.argv[1]
+vhd_size = sys.argv[2]
+sparse_vhd = sys.argv[3]
+
+lines = []
+if os.path.exists(config_path):
+    with open(config_path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+new_lines = []
+in_wsl2 = False
+saw_wsl2 = False
+updated_size = False
+updated_sparse = False
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        section = stripped[1:-1].strip().lower()
+        if section == "wsl2":
+            in_wsl2 = True
+            saw_wsl2 = True
+        else:
+            if in_wsl2:
+                if vhd_size and not updated_size:
+                    new_lines.append(f"defaultVhdSize={vhd_size}\n")
+                    updated_size = True
+                if sparse_vhd and not updated_sparse:
+                    new_lines.append(f"sparseVhd={sparse_vhd}\n")
+                    updated_sparse = True
+            in_wsl2 = False
+
+    if in_wsl2:
+        if vhd_size and stripped.startswith("defaultVhdSize="):
+            new_lines.append(f"defaultVhdSize={vhd_size}\n")
+            updated_size = True
+            continue
+        if sparse_vhd and stripped.startswith("sparseVhd="):
+            new_lines.append(f"sparseVhd={sparse_vhd}\n")
+            updated_sparse = True
+            continue
+
+    new_lines.append(line)
+
+if not saw_wsl2:
+    if new_lines and not new_lines[-1].endswith("\n"):
+        new_lines[-1] += "\n"
+    if new_lines and new_lines[-1].strip() != "":
+        new_lines.append("\n")
+    new_lines.append("[wsl2]\n")
+    if vhd_size:
+        new_lines.append(f"defaultVhdSize={vhd_size}\n")
+    if sparse_vhd:
+        new_lines.append(f"sparseVhd={sparse_vhd}\n")
+elif in_wsl2:
+    if vhd_size and not updated_size:
+        new_lines.append(f"defaultVhdSize={vhd_size}\n")
+    if sparse_vhd and not updated_sparse:
+        new_lines.append(f"sparseVhd={sparse_vhd}\n")
+
+os.makedirs(os.path.dirname(os.path.abspath(config_path)), exist_ok=True)
+with open(config_path, "w", encoding="utf-8") as f:
+    f.writelines(new_lines)
+EOF
+        echo "${GREEN}Configured WSL2 VHD settings in $WslConfigPath${RESET}"
+    fi
+fi
+
 # 5. Build and launch the container stack
 echo ""
 echo "${CYAN}Building and launching container stack via Docker Compose...${RESET}"
