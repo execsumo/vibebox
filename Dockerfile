@@ -201,7 +201,7 @@ RUN mkdir -p /home/${USERNAME}/.ssh && \
 COPY scripts/ /usr/local/bin/
 # chmod explicitly — the execute bit does not survive a Windows/git checkout reliably.
 RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup \
-             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/entrypoint
+             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/entrypoint
 
 # The dotfiles tool is a standalone project; vibebox is just a consumer of it.
 # It owns the manifest format and all git/symlink mechanics, so there is no
