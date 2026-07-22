@@ -42,6 +42,7 @@ Details on each step below.
 | Git + GitHub CLI | `git` and `gh` |
 | tmux | Terminal multiplexer |
 | zsh | Default shell |
+| btop, htop | Resource and process monitors |
 | ripgrep, fzf, jq | Search and data tools |
 | Common build utilities | `build-essential`, `curl`, `wget`, etc. |
 
