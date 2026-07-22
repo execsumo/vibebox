@@ -134,9 +134,9 @@ chmod 600 "$SshConfigPath"
 } >> "$SshConfigPath"
 echo "${GREEN}Configured SSH alias 'Host $SandboxName' -> 127.0.0.1:$SshPort in $SshConfigPath${RESET}"
 
-# 4b. Configure WSL2 VHD settings in ~/.wslconfig if defaultVhdSize or sparseVhd are set.
-DefaultVhdSize="$(get_env_value defaultVhdSize '')"
-SparseVhd="$(get_env_value sparseVhd '')"
+# 4b. Configure WSL2 VHD settings in ~/.wslconfig if SANDBOX_DEFAULT_VHD_SIZE or SANDBOX_SPARSE_VHD are set.
+DefaultVhdSize="${SANDBOX_DEFAULT_VHD_SIZE:-$(get_env_value SANDBOX_DEFAULT_VHD_SIZE 50GB)}"
+SparseVhd="${SANDBOX_SPARSE_VHD:-$(get_env_value SANDBOX_SPARSE_VHD true)}"
 
 if [ -n "$DefaultVhdSize" ] || [ -n "$SparseVhd" ]; then
     WslConfigPath="$HOME/.wslconfig"

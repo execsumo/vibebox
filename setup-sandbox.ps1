@@ -13,8 +13,8 @@ $Username = "dev"
 $SandboxName = "vibebox"
 $SshPort = "22"
 $TsAuthKey = ""
-$DefaultVhdSize = ""
-$SparseVhd = ""
+$DefaultVhdSize = if (-not [string]::IsNullOrWhiteSpace($env:SANDBOX_DEFAULT_VHD_SIZE)) { $env:SANDBOX_DEFAULT_VHD_SIZE.Trim() } else { "50GB" }
+$SparseVhd = if (-not [string]::IsNullOrWhiteSpace($env:SANDBOX_SPARSE_VHD)) { $env:SANDBOX_SPARSE_VHD.Trim() } else { "true" }
 $EnvPath = Join-Path $PSScriptRoot ".env"
 if (Test-Path $EnvPath) {
     $EnvContent = Get-Content $EnvPath
@@ -31,10 +31,10 @@ if (Test-Path $EnvPath) {
         if ($Line -match "^TS_AUTHKEY=(.*)$") {
             $TsAuthKey = $Matches[1].Trim()
         }
-        if ($Line -match "^defaultVhdSize=(.*)$") {
+        if ($Line -match "^SANDBOX_DEFAULT_VHD_SIZE=(.*)$" -and [string]::IsNullOrWhiteSpace($env:SANDBOX_DEFAULT_VHD_SIZE)) {
             $DefaultVhdSize = $Matches[1].Trim()
         }
-        if ($Line -match "^sparseVhd=(.*)$") {
+        if ($Line -match "^SANDBOX_SPARSE_VHD=(.*)$" -and [string]::IsNullOrWhiteSpace($env:SANDBOX_SPARSE_VHD)) {
             $SparseVhd = $Matches[1].Trim()
         }
     }
