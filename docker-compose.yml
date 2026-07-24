@@ -85,6 +85,7 @@ services:
         - TAILWIND_LANGUAGE_SERVER_VERSION=${TAILWIND_LANGUAGE_SERVER_VERSION:-latest}
     container_name: ${SANDBOX_NAME:-vibebox}
     image: ${SANDBOX_NAME:-vibebox}:latest
+    privileged: true
     # Share the network namespace of the tailscale container
     network_mode: service:tailscale
     depends_on:
@@ -113,6 +114,8 @@ services:
       - sandbox_home:/home/${SANDBOX_USERNAME:-dev}
       # Mount the host backups folder to /backups inside the container so internal backups write directly to the backups folder
       - ./backups/${SANDBOX_NAME:-vibebox}:/backups
+      # Mount the host Docker socket to enable Docker-out-of-Docker CLI access from inside the sandbox
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD-SHELL", "pgrep -x sshd >/dev/null && test -s /home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys"]
       interval: 30s

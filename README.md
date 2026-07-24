@@ -26,10 +26,10 @@ Details on each step below.
 
 | Tool | Notes |
 |---|---|
+| Herdr |  Multiplexer (Herdr) |
 | Claude Code | AI coding agent (Anthropic) |
 | Codex CLI | AI coding agent (OpenAI) |
 | Antigravity (`agy`) | AI coding agent (Google) |
-| Herdr | AI coding agent (Herdr) |
 | Pi (`pi`) | AI coding agent (Earendil Works) |
 | Hermes Agent | AI coding agent (Nous Research) |
 | Hermes WebUI | Web frontend for Hermes Agent, served at `https://hermes.<tailnet>.ts.net` |
@@ -40,6 +40,7 @@ Details on each step below.
 | Bun | Fast JS runtime / package manager |
 | Python | System Python 3 |
 | Git + GitHub CLI | `git` and `gh` |
+| Docker | Container runtime & CLI (`docker` and `docker compose`) |
 | tmux | Terminal multiplexer |
 | zsh | Default shell |
 | btop, htop | Resource and process monitors |

@@ -1,0 +1,3 @@
+#!/bin/bash
+# Tailscale CLI wrapper delegating to the vibebox-tailscale sidecar container.
+exec docker exec -i "${SANDBOX_NAME:-vibebox}-tailscale" tailscale "$@"

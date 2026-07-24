@@ -163,5 +163,6 @@ Pin a tag or SHA there if you want reproducible builds.
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
 | GitHub CLI | apt (official repo) | `/usr/bin/gh` | apt upgrade | — |
+| Docker | apt (official repo) | `/usr/bin/docker` | apt upgrade | — |
 
 Language servers (pyright, typescript-language-server, etc.) are all npm globals and are covered by `npm update -g`.

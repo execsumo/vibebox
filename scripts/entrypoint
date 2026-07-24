@@ -51,6 +51,23 @@ while IFS= read -r -d '' kv; do
   printf '%s=%s\n' "$name" "$value" >> "$SSH_ENV_FILE"
 done < <(env -0)
 
+# Handle Docker daemon startup & socket permissions.
+# On Windows host, docker compose bind-mounting /var/run/docker.sock creates a directory instead of a socket.
+if [ -d /var/run/docker.sock ]; then
+  rmdir /var/run/docker.sock 2>/dev/null || true
+fi
+
+if [ -S /var/run/docker.sock ]; then
+  chown root:docker /var/run/docker.sock 2>/dev/null || true
+  chmod 666 /var/run/docker.sock 2>/dev/null || true
+elif command -v service >/dev/null 2>&1; then
+  service docker start >/dev/null 2>&1 || true
+  if [ -S /var/run/docker.sock ]; then
+    chown root:docker /var/run/docker.sock 2>/dev/null || true
+    chmod 666 /var/run/docker.sock 2>/dev/null || true
+  fi
+fi
+
 # Start Hermes WebUI as the sandbox user if installed (daemonized via ctl.sh, so
 # sshd startup is not blocked; failure is non-fatal). Binds 0.0.0.0 so the
 # hermes-ts tailscale sidecar can proxy https://<HERMES_HOSTNAME>.<tailnet>.ts.net

@@ -56,6 +56,20 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
     apt-get update && apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
 
+# 2b. Install Docker Engine & CLI via official repository
+RUN mkdir -p -m 755 /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin && \
+    rm -rf /var/lib/apt/lists/*
+
+
 # 3. Install Node.js LTS major via NodeSource (required for Claude & Codex CLIs)
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - && \
     apt-get install -y nodejs && \
@@ -141,7 +155,7 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
-    for t in claude codex bun node gh; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
+    for t in claude codex bun node gh docker; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
     for t in agy herdr rtk hermes codegraph codeburn pi; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! "$t" --version >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
@@ -181,12 +195,13 @@ RUN set -eux; \
     else \
       groupadd -g 1000 "${USERNAME}"; \
     fi; \
+    getent group docker >/dev/null || groupadd docker; \
     if getent passwd 1000 >/dev/null; then \
       EXISTING_USER="$(getent passwd 1000 | cut -d: -f1)"; \
       if [ "$EXISTING_USER" != "${USERNAME}" ]; then usermod -l "${USERNAME}" -d "/home/${USERNAME}" -m "$EXISTING_USER"; fi; \
-      usermod -s /bin/zsh -g "${USERNAME}" -G sudo "${USERNAME}"; \
+      usermod -s /bin/zsh -g "${USERNAME}" -G sudo,docker "${USERNAME}"; \
     else \
-      useradd -rm -d "/home/${USERNAME}" -s /bin/zsh -g "${USERNAME}" -G sudo -u 1000 "${USERNAME}"; \
+      useradd -rm -d "/home/${USERNAME}" -s /bin/zsh -g "${USERNAME}" -G sudo,docker -u 1000 "${USERNAME}"; \
     fi; \
     echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}" && \
     chmod 0440 "/etc/sudoers.d/${USERNAME}"
@@ -202,7 +217,7 @@ RUN mkdir -p /home/${USERNAME}/.ssh && \
 COPY scripts/ /usr/local/bin/
 # chmod explicitly — the execute bit does not survive a Windows/git checkout reliably.
 RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup \
-             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/entrypoint
+             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/entrypoint /usr/local/bin/tailscale
 
 # The dotfiles tool is a standalone project; vibebox is just a consumer of it.
 # It owns the manifest format and all git/symlink mechanics, so there is no
@@ -214,6 +229,9 @@ ARG DOTTER_REF=main
 ADD https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles \
     /usr/local/bin/dotfiles
 RUN chmod +x /usr/local/bin/dotfiles && dotfiles version
+
+# Make /usr/local and /opt owned by the sandbox user so tool installers, global packages, and dotfiles can write freely without sudo
+RUN chown -R ${USERNAME}:${USERNAME} /usr/local /opt
 
 # Expose default SSH port inside container
 EXPOSE 22
