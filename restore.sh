@@ -56,14 +56,17 @@ is_valid_backup_name() {
 
 SandboxName="$(get_env_value SANDBOX_NAME vibebox)"
 Username="$(get_env_value SANDBOX_USERNAME dev)"
-VolumeName="$SandboxName-home"
+# Home is either the named Docker volume (default) or, when SANDBOX_HOME_HOST_PATH
+# is set in .env, a host folder bind-mounted into the sandbox.
+HostHomePath="$(get_env_value SANDBOX_HOME_HOST_PATH '')"
+HomeMountSource="${HostHomePath:-$SandboxName-home}"
 BackupsDir="$SCRIPT_DIR/backups/$SandboxName"
 
 echo "${CYAN}==============================================${RESET}"
 echo "${CYAN}         Restoring Sandbox Home State         ${RESET}"
 echo "${CYAN}==============================================${RESET}"
 echo "${YELLOW}Sandbox: $SandboxName${RESET}"
-echo "${YELLOW}Volume:  $VolumeName${RESET}"
+echo "${YELLOW}Home:    $HomeMountSource${RESET}"
 
 if [ ! -d "$BackupsDir" ]; then
     echo "${YELLOW}No backups folder found at $BackupsDir.${RESET}"
@@ -138,7 +141,7 @@ if ! is_valid_backup_name "$SandboxName" "$Filename"; then
 fi
 
 echo ""
-echo "${RED}WARNING: Restoring will completely overwrite the home volume for this sandbox.${RESET}"
+echo "${RED}WARNING: Restoring will completely overwrite the home directory for this sandbox.${RESET}"
 echo "${YELLOW}Target Backup: backups/$SandboxName/$Filename${RESET}"
 read -r -p "Are you absolutely sure you want to restore? (y/N): " Confirm
 
@@ -148,7 +151,8 @@ if [ "$Confirm" != "y" ] && [ "$Confirm" != "yes" ]; then
     exit 0
 fi
 
-# Mount the home volume at its real path under /restore-stage, wipe it, then extract.
+# Mount home (named volume, or host folder when SANDBOX_HOME_HOST_PATH is set) at
+# its real path under /restore-stage, wipe it, then extract.
 # Archives are root-relative (begin with home/<user>/...).
 read -r -d '' RESTORE_SCRIPT <<'EOF' || true
 set -e
@@ -180,7 +184,7 @@ fi
 
 echo "${CYAN}3/4 Wiping current active files, including hidden files, and extracting backup...${RESET}"
 if docker run --rm \
-    -v "${VolumeName}:/restore-stage/home/${Username}" \
+    -v "${HomeMountSource}:/restore-stage/home/${Username}" \
     -v "${BackupsDir}:/backup:ro" \
     alpine sh -c "$RESTORE_SCRIPT" sh "$Filename" "$Username"; then
 

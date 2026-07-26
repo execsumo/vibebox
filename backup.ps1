@@ -25,7 +25,10 @@ function Get-EnvValue {
 
 $SandboxName = Get-EnvValue -Name "SANDBOX_NAME" -Default "vibebox"
 $Username = Get-EnvValue -Name "SANDBOX_USERNAME" -Default "dev"
-$VolumeName = "$SandboxName-home"
+# Home is either the named Docker volume (default) or, when SANDBOX_HOME_HOST_PATH
+# is set in .env, a host folder bind-mounted into the sandbox.
+$HostHomePath = Get-EnvValue -Name "SANDBOX_HOME_HOST_PATH" -Default ""
+$HomeMountSource = if ($HostHomePath) { $HostHomePath } else { "$SandboxName-home" }
 $RetentionDays = [int](Get-EnvValue -Name "BACKUP_RETENTION_DAYS" -Default "7")
 $BackupsDir = Join-Path $PSScriptRoot "backups\$SandboxName"
 
@@ -51,17 +54,18 @@ Write-Host "==============================================" -ForegroundColor Cya
 Write-Host "         Creating Sandbox Home Backup         " -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "Sandbox:     $SandboxName" -ForegroundColor Yellow
-Write-Host "Volume:      $VolumeName" -ForegroundColor Yellow
+Write-Host "Home:        $HomeMountSource" -ForegroundColor Yellow
 Write-Host "Backup File: backups\$SandboxName\$Filename" -ForegroundColor Yellow
 Write-Host "Retention:   $RetentionDays days" -ForegroundColor Yellow
 
 try {
-    # Mount the home volume at its real path under a staging root (/stage) so the
-    # archive is root-relative (home/<user>/...) and matches the in-container
-    # `backup` command. restore.ps1 extracts it back. .vibebox holds root-owned SSH
-    # host keys the volume already persists, so it is excluded.
+    # Mount home (named volume, or host folder when SANDBOX_HOME_HOST_PATH is set)
+    # at its real path under a staging root (/stage) so the archive is root-relative
+    # (home/<user>/...) and matches the in-container `backup` command. restore.ps1
+    # extracts it back. .vibebox holds onboard marker files that should re-run after
+    # a restore, and SSH host keys live on their own volume — so it is excluded.
     docker run --rm `
-        -v "${VolumeName}:/stage/home/${Username}:ro" `
+        -v "${HomeMountSource}:/stage/home/${Username}:ro" `
         -v "${BackupsDir}:/backup" `
         alpine tar czf "/backup/$Filename" --exclude="home/${Username}/.vibebox" -C /stage "home/${Username}"
 

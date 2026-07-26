@@ -64,7 +64,7 @@ Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — insta
 
 - SSH key authentication, password login disabled
 - Tailscale sidecar for remote access without opening a public port
-- A single persistent Docker volume for your home directory — your files, config, and SSH host identity survive rebuilds; everything else comes from the image
+- A persistent Docker volume for your home directory (optionally a host folder you can browse from Windows) — your files, config, and SSH host identity survive rebuilds; everything else comes from the image
 - `backup` / `restore` commands (inside container and host scripts)
 - `onboard` command for first-time setup: GitHub CLI auth, git identity, dotfiles
 
@@ -288,7 +288,7 @@ backup before-refactor
 ./restore.sh before-refactor
 ```
 
-A backup archives your home directory into a single `.tar.gz` (SSH host keys under `~/.vibebox` are excluded — the home volume already persists them). Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home volume, extracts the selected backup, then starts the workspace again. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`, `auto-before-update`) are kept until you delete them.
+A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them; SSH host keys live on their own volume and are untouched by backup/restore). Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`, `auto-before-update`) are kept until you delete them.
 
 ### Update tools
 
@@ -306,18 +306,49 @@ Upgrades all in-container tools (APT packages, npm globals, Bun, RTK, Herdr, Her
 
 **What survives a rebuild is your home directory.** That is the whole model:
 
-- `/home/<SANDBOX_USERNAME>` — all your files, settings, shell history, and the sandbox's SSH host identity (under `~/.vibebox/ssh`), in the `<SANDBOX_NAME>-home` volume
+- `/home/<SANDBOX_USERNAME>` — all your files, settings, and shell history, in the `<SANDBOX_NAME>-home` volume (or a host folder — see [Mounting Home from a Host Folder](#mounting-home-from-a-host-folder))
+- SSH host identity — the `<SANDBOX_NAME>-ssh-keys` volume, mounted at `/opt/vibebox/ssh`
 - Tailscale auth/identity (`<SANDBOX_NAME>-tailscale-state` volume)
 - `authorized_keys` and `backups/` live on the host as bind mounts, outside the container lifecycle entirely
 
 Everything else comes from the image and is disposable. Anything you install with `apt` or `sudo cp` works for the life of the container but is **not** persisted — to make a tool or package durable, add it to the Dockerfile and rebuild. The in-container `update` command upgrades tools in place, but those changes reset on the next `down`/`up`; treat `docker compose up -d --build` as the durable update path.
 
-SSH host keys are generated once on first boot into the home volume, so rebuilds keep the same identity — no "host key changed" warnings. (A `restore` regenerates them, so expect one host-key prompt after a deliberate rewind.)
+SSH host keys are generated once on first boot into a dedicated volume (`/opt/vibebox/ssh`), so rebuilds — and restores — keep the same identity: no "host key changed" warnings.
 
 **Two distinctions worth knowing:**
 
 - `docker compose stop` / `start` keeps the same container — the writable layer is preserved
-- `docker compose down -v` deletes named volumes, **wiping your home directory and all persisted state** — avoid unless you intend a full reset
+- `docker compose down -v` deletes named volumes, **wiping your home directory and all persisted state** — avoid unless you intend a full reset. (If home is a host folder via `SANDBOX_HOME_HOST_PATH`, `down -v` does *not* touch it.)
+
+### Mounting Home from a Host Folder
+
+By default home lives in a Docker named volume — fast and Linux-native, but invisible to the host OS. If you want the same files on both sides (edit on Windows, run in the sandbox), point `SANDBOX_HOME_HOST_PATH` in `.env` at an absolute host path:
+
+```env
+SANDBOX_HOME_HOST_PATH=D:/vibebox
+```
+
+Then `docker compose up -d`. Use forward slashes; on Docker Desktop the drive must be shared (all local drives are, by default, on current versions). A fresh empty folder is seeded with the usual skel files on first boot.
+
+**Upgrading from an earlier vibebox?** Boot once on the new version *before* setting `SANDBOX_HOME_HOST_PATH` (`docker compose up -d --build`), so your SSH host keys migrate from the home volume to their own volume. Switching in the same step hides the old keys behind the bind mount, and the sandbox starts with a fresh host identity (one "host key changed" prompt per client).
+
+**Migrating an existing sandbox** (volume → host folder, or back). The backup/restore tools target whichever backend is configured, so they double as the migration path:
+
+1. `.\backup.ps1 migrate` — archive the current home.
+2. Set (or clear) `SANDBOX_HOME_HOST_PATH` in `.env`.
+3. `docker compose up -d` — boots with the other storage backend.
+4. `.\restore.ps1 migrate` — restores into the new location.
+
+The named volume is never deleted by switching, so you can flip back and forth without losing the old copy. SSH host identity is unaffected either way — the keys live on their own volume.
+
+**Caveats:**
+
+- **File watchers don't see host-side edits.** inotify events do not cross the Windows filesystem bridge, so `vite`/`nodemon`/`jest --watch` only react to changes made *inside* the container. Use polling when editing from Windows (e.g. `CHOKIDAR_USEPOLLING=true`).
+- **Slower I/O.** Many-small-file workloads (npm installs, builds) run noticeably slower through the bridge than on the native volume.
+- **git "dubious ownership" on host-created repos** — files made on Windows appear root-owned in the container. The entrypoint sets `safe.directory '*'` automatically when this option is on.
+- **Your home is host-visible.** Agent auth tokens, shell history, and `~/.ssh/environment` (which carries any API keys from `.env`) sit in a normal host folder now, guarded by host OS permissions instead of living inside the Docker VM.
+- **`docker compose down -v` no longer wipes home** — it's your folder. Backups and restores work unchanged.
+- Close host-side apps holding the folder (editors, terminals) while running `restore` — it deletes and re-extracts everything in it.
 
 ### Multiple Sandboxes
 
@@ -335,6 +366,7 @@ This namespaces container names, Docker volumes, the Tailscale hostname, and the
 client-a
 client-a-tailscale
 client-a-home
+client-a-ssh-keys
 client-a-tailscale-state
 backups/client-a/
 ```

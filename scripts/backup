@@ -30,8 +30,8 @@ echo "Saving $HOME to /backups/$FILENAME..."
 
 # $HOME is user-owned, so no sudo needed. --warning=no-file-changed keeps a
 # live-system race (exit 1) from aborting the script; exit >1 is fatal.
-# .vibebox holds root-owned SSH host keys (not readable here and persisted by the
-# home volume anyway), so it is excluded.
+# .vibebox holds onboard marker files that should re-run after a restore, and SSH
+# host keys live on their own volume (not in home at all) — so it is excluded.
 set +e
 tar \
   --warning=no-file-changed \

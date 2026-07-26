@@ -107,11 +107,16 @@ services:
       # Mount the public SSH keys as read-only from the host into the user's home folder
       - ./authorized_keys:/home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys:ro
       # Persist the user's home directory so settings and user files survive rebuilds.
-      # This is the ONLY persisted pet: SSH host keys live under $HOME/.vibebox/ssh
-      # (generated once by the entrypoint), so the sandbox keeps a stable identity
-      # without persisting /etc, /opt, or /usr/local. Everything durable belongs in
-      # the Dockerfile; a rebuild is the way to change the rest.
-      - sandbox_home:/home/${SANDBOX_USERNAME:-dev}
+      # Default is the sandbox_home named volume; set SANDBOX_HOME_HOST_PATH in .env
+      # (e.g. D:/vibebox) to bind-mount a host folder as home instead, so the same
+      # files are visible on the host and in the container. Everything else durable
+      # belongs in the Dockerfile; a rebuild is the way to change the rest.
+      - "${SANDBOX_HOME_HOST_PATH:-sandbox_home}:/home/${SANDBOX_USERNAME:-dev}"
+      # SSH host keys get their own volume rather than living in home: sshd rejects
+      # host keys whose permission bits are too open, and those bits are not reliable
+      # on host bind mounts. Generated once by the entrypoint; migrated out of
+      # ~/.vibebox/ssh automatically on first boot after this split.
+      - sandbox_ssh_keys:/opt/vibebox/ssh
       # Mount the host backups folder to /backups inside the container so internal backups write directly to the backups folder
       - ./backups/${SANDBOX_NAME:-vibebox}:/backups
       # Mount the host Docker socket to enable Docker-out-of-Docker CLI access from inside the sandbox
@@ -128,9 +133,15 @@ services:
     restart: unless-stopped
 
 volumes:
-  # Named volume for persistent user home directory data (the only persisted pet).
+  # Named volume for persistent user home directory data. Unused when
+  # SANDBOX_HOME_HOST_PATH points home at a host folder instead (kept declared so
+  # switching back is non-destructive).
   sandbox_home:
     name: ${SANDBOX_NAME:-vibebox}-home
+  # Named volume for the SSH host keys (separate from home so home may be a host
+  # bind mount — see SANDBOX_HOME_HOST_PATH in .env.example).
+  sandbox_ssh_keys:
+    name: ${SANDBOX_NAME:-vibebox}-ssh-keys
   # Named volume to persist Tailscale authentication and state between container runs
   tailscale_state:
     name: ${SANDBOX_NAME:-vibebox}-tailscale-state

@@ -32,7 +32,10 @@ get_env_value() {
 
 SandboxName="$(get_env_value SANDBOX_NAME vibebox)"
 Username="$(get_env_value SANDBOX_USERNAME dev)"
-VolumeName="$SandboxName-home"
+# Home is either the named Docker volume (default) or, when SANDBOX_HOME_HOST_PATH
+# is set in .env, a host folder bind-mounted into the sandbox.
+HostHomePath="$(get_env_value SANDBOX_HOME_HOST_PATH '')"
+HomeMountSource="${HostHomePath:-$SandboxName-home}"
 RetentionDays="$(get_env_value BACKUP_RETENTION_DAYS 7)"
 BackupsDir="$SCRIPT_DIR/backups/$SandboxName"
 
@@ -57,16 +60,17 @@ echo "${CYAN}==============================================${RESET}"
 echo "${CYAN}         Creating Sandbox Home Backup         ${RESET}"
 echo "${CYAN}==============================================${RESET}"
 echo "${YELLOW}Sandbox:     $SandboxName${RESET}"
-echo "${YELLOW}Volume:      $VolumeName${RESET}"
+echo "${YELLOW}Home:        $HomeMountSource${RESET}"
 echo "${YELLOW}Backup File: backups/$SandboxName/$Filename${RESET}"
 echo "${YELLOW}Retention:   $RetentionDays days${RESET}"
 
-# Mount the home volume at its real path under a staging root (/stage) so the
-# archive is root-relative (home/<user>/...) and matches the in-container `backup`
-# command. restore.sh extracts it back. .vibebox holds root-owned SSH host keys the
-# volume already persists, so it is excluded.
+# Mount home (named volume, or host folder when SANDBOX_HOME_HOST_PATH is set) at
+# its real path under a staging root (/stage) so the archive is root-relative
+# (home/<user>/...) and matches the in-container `backup` command. restore.sh
+# extracts it back. .vibebox holds onboard marker files that should re-run after a
+# restore, and SSH host keys live on their own volume — so it is excluded.
 if docker run --rm \
-    -v "${VolumeName}:/stage/home/${Username}:ro" \
+    -v "${HomeMountSource}:/stage/home/${Username}:ro" \
     -v "${BackupsDir}:/backup" \
     alpine tar czf "/backup/$Filename" --exclude="home/${Username}/.vibebox" -C /stage "home/${Username}"; then
 

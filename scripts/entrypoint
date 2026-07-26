@@ -1,20 +1,44 @@
 #!/bin/bash
-# Container entrypoint. Generates SSH host keys once into the persisted home
+# Container entrypoint. Generates SSH host keys once into a dedicated named
 # volume so the sandbox keeps a stable identity across rebuilds (no
 # "host key changed" warnings), then hands off to the given command (sshd).
 set -e
 
 # Resolve the sandbox user's home (UID 1000) regardless of the configured username.
-VIBEBOX_DIR="$(getent passwd 1000 | cut -d: -f6)/.vibebox"
-KEYDIR="$VIBEBOX_DIR/ssh"
-mkdir -p "$KEYDIR"
+SANDBOX_HOME="$(getent passwd 1000 | cut -d: -f6)"
+VIBEBOX_DIR="$SANDBOX_HOME/.vibebox"
+
+# When home is a host bind mount (SANDBOX_HOME_HOST_PATH), first boot is detected
+# by the absence of .vibebox (home is never literally empty — Docker creates .ssh
+# for the nested authorized_keys mount before this script runs). Seed the folder
+# with the skel files — no-clobber, so existing host files win — and hand
+# ownership to the sandbox user. A named volume self-seeds from the image
+# instead, so this only runs for bind mounts.
+if [ -n "${SANDBOX_HOME_HOST_PATH:-}" ] && [ ! -d "$VIBEBOX_DIR" ]; then
+  cp -rn /etc/skel/. "$SANDBOX_HOME/" 2>/dev/null || true
+  chown -R 1000:1000 "$SANDBOX_HOME" 2>/dev/null || true
+fi
+
+# Host keys live on their own named volume, not in home: sshd rejects host keys
+# whose permission bits are too open, and those bits are not reliable on host
+# bind mounts (SANDBOX_HOME_HOST_PATH).
+KEYDIR=/opt/vibebox/ssh
+mkdir -p "$VIBEBOX_DIR" "$KEYDIR"
+
+# One-time migration: host keys used to live under ~/.vibebox/ssh in the home
+# volume. Move them to the dedicated volume so the sandbox keeps its identity
+# (no "host key changed" warning) across this upgrade.
+if [ ! -f "$KEYDIR/ssh_host_ed25519_key" ] && [ -f "$VIBEBOX_DIR/ssh/ssh_host_ed25519_key" ]; then
+  mv "$VIBEBOX_DIR"/ssh/ssh_host_* "$KEYDIR/"
+  rmdir "$VIBEBOX_DIR/ssh" 2>/dev/null || true
+fi
 
 # mkdir above runs as root, so .vibebox lands root-owned — but `onboard` writes its
 # marker files (rtk-initialized, codegraph-installed) there as the sandbox user, and
-# the failed redirect aborts onboard under `set -e`. Chown the directory itself only:
-# ssh/ must stay root-owned, since sshd requires root-owned mode-600 host keys.
+# the failed redirect aborts onboard under `set -e`. Chown the directory itself.
 # Runs every boot, so existing volumes with the old root-owned dir self-heal.
-chown 1000:1000 "$VIBEBOX_DIR"
+# || true: some host bind-mount filesystems reject chown; don't abort the boot.
+chown 1000:1000 "$VIBEBOX_DIR" 2>/dev/null || true
 
 # Runs as root, so the generated private keys are root-owned mode 600 — the
 # standard, always-accepted case for sshd HostKey files.
@@ -26,14 +50,14 @@ chown 1000:1000 "$VIBEBOX_DIR"
 # in .env is invisible to every shell in the box. Paired with PermitUserEnvironment
 # in the Dockerfile. Rewritten from scratch each boot, so a key deleted from .env
 # actually disappears instead of lingering in the persisted home volume.
-SANDBOX_HOME="$(getent passwd 1000 | cut -d: -f6)"
 SSH_ENV_FILE="$SANDBOX_HOME/.ssh/environment"
 mkdir -p "$SANDBOX_HOME/.ssh"
 : > "$SSH_ENV_FILE"
 # Written as root but read by sshd as the sandbox user: 0600 keeps API keys out of
 # reach of anything else, and the chown is what makes them readable at all.
-chmod 600 "$SSH_ENV_FILE"
-chown 1000:1000 "$SSH_ENV_FILE"
+# || true: some host bind-mount filesystems reject chmod/chown; don't abort the boot.
+chmod 600 "$SSH_ENV_FILE" 2>/dev/null || true
+chown 1000:1000 "$SSH_ENV_FILE" 2>/dev/null || true
 while IFS= read -r -d '' kv; do
   name="${kv%%=*}"
   value="${kv#*=}"
@@ -50,6 +74,15 @@ while IFS= read -r -d '' kv; do
   esac
   printf '%s=%s\n' "$name" "$value" >> "$SSH_ENV_FILE"
 done < <(env -0)
+
+# Host-created files (e.g. repos cloned on Windows into a bind-mounted home)
+# appear root-owned in the container, and git refuses to touch them ("detected
+# dubious ownership"). A wildcard safe.directory is acceptable in a single-user
+# sandbox; only applied when home is a host bind mount.
+if [ -n "${SANDBOX_HOME_HOST_PATH:-}" ]; then
+  runuser -u "$(getent passwd 1000 | cut -d: -f1)" -- env HOME="$SANDBOX_HOME" sh -c \
+    "git config --global --get-all safe.directory 2>/dev/null | grep -qx '\*' || git config --global --add safe.directory '*'" || true
+fi
 
 # Handle Docker daemon startup & socket permissions.
 # On Windows host, docker compose bind-mounting /var/run/docker.sock creates a directory instead of a socket.

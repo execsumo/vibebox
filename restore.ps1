@@ -46,7 +46,10 @@ function Resolve-BackupName {
 
 $SandboxName = Get-EnvValue -Name "SANDBOX_NAME" -Default "vibebox"
 $Username = Get-EnvValue -Name "SANDBOX_USERNAME" -Default "dev"
-$VolumeName = "$SandboxName-home"
+# Home is either the named Docker volume (default) or, when SANDBOX_HOME_HOST_PATH
+# is set in .env, a host folder bind-mounted into the sandbox.
+$HostHomePath = Get-EnvValue -Name "SANDBOX_HOME_HOST_PATH" -Default ""
+$HomeMountSource = if ($HostHomePath) { $HostHomePath } else { "$SandboxName-home" }
 $BackupsDir = Join-Path $PSScriptRoot "backups\$SandboxName"
 $EscapedSandboxName = [regex]::Escape($SandboxName)
 
@@ -54,7 +57,7 @@ Write-Host "==============================================" -ForegroundColor Cya
 Write-Host "         Restoring Sandbox Home State         " -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "Sandbox: $SandboxName" -ForegroundColor Yellow
-Write-Host "Volume:  $VolumeName" -ForegroundColor Yellow
+Write-Host "Home:    $HomeMountSource" -ForegroundColor Yellow
 
 if (-not (Test-Path $BackupsDir)) {
     Write-Host "No backups folder found at $BackupsDir." -ForegroundColor Yellow
@@ -123,7 +126,7 @@ if ($Filename -notmatch "^$EscapedSandboxName-backup-[a-zA-Z0-9_-]+\.tar\.gz$" -
 }
 
 Write-Host ""
-Write-Host "WARNING: Restoring will completely overwrite the home volume for this sandbox." -ForegroundColor Red
+Write-Host "WARNING: Restoring will completely overwrite the home directory for this sandbox." -ForegroundColor Red
 Write-Host "Target Backup: backups\$SandboxName\$Filename" -ForegroundColor Yellow
 $Confirm = Read-Host "Are you absolutely sure you want to restore? (y/N)"
 
@@ -142,8 +145,9 @@ try {
     docker compose stop sandbox
 
     Write-Host "3/4 Wiping current active files, including hidden files, and extracting backup..." -ForegroundColor Cyan
-    # Mount the home volume at its real path under /restore-stage, wipe it, then
-    # extract. Archives are root-relative (begin with home/<user>/...).
+    # Mount home (named volume, or host folder when SANDBOX_HOME_HOST_PATH is set)
+    # at its real path under /restore-stage, wipe it, then extract. Archives are
+    # root-relative (begin with home/<user>/...).
     $RestoreScript = @'
 set -e
 F="$1"
@@ -155,7 +159,7 @@ tar xzf "/backup/$F" -C /restore-stage
     # Strip CR so the script is valid for busybox sh regardless of file line endings.
     $RestoreScript = $RestoreScript -replace "`r", ""
     docker run --rm `
-        -v "${VolumeName}:/restore-stage/home/${Username}" `
+        -v "${HomeMountSource}:/restore-stage/home/${Username}" `
         -v "${BackupsDir}:/backup:ro" `
         alpine sh -c $RestoreScript sh "$Filename" "$Username"
 

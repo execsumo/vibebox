@@ -182,9 +182,12 @@ RUN mkdir /var/run/sshd && \
     # The usual objection (a user setting LD_PRELOAD to escalate) is moot here: the
     # sandbox user already has passwordless sudo, configured below.
     echo "PermitUserEnvironment yes" >> /etc/ssh/sshd_config && \
-    # Host keys live in the persisted home volume (generated once by the entrypoint) so the
-    # sandbox keeps a stable identity across rebuilds without persisting all of /etc.
-    printf 'HostKey /home/%s/.vibebox/ssh/ssh_host_ed25519_key\nHostKey /home/%s/.vibebox/ssh/ssh_host_rsa_key\n' "${USERNAME}" "${USERNAME}" >> /etc/ssh/sshd_config
+    # Host keys live in a dedicated named volume at /opt/vibebox/ssh (generated once by
+    # the entrypoint) so the sandbox keeps a stable identity across rebuilds without
+    # persisting all of /etc — and so home itself may be a host bind mount
+    # (SANDBOX_HOME_HOST_PATH), where the strict key permission bits sshd requires
+    # are not reliable. The entrypoint migrates pre-split keys from ~/.vibebox/ssh.
+    printf 'HostKey /opt/vibebox/ssh/ssh_host_ed25519_key\nHostKey /opt/vibebox/ssh/ssh_host_rsa_key\n' >> /etc/ssh/sshd_config
 
 # Create a dedicated custom user with UID/GID 1000 and setup passwordless sudo
 # Configures Zsh (/bin/zsh) as the default shell for a consistent macOS developer feel!
@@ -236,6 +239,6 @@ RUN chown -R ${USERNAME}:${USERNAME} /usr/local /opt
 # Expose default SSH port inside container
 EXPOSE 22
 
-# Generate host keys once (into the persisted home volume) then start sshd.
+# Generate host keys once (into the dedicated ssh-keys volume) then start sshd.
 ENTRYPOINT ["/usr/local/bin/entrypoint"]
 CMD ["/usr/sbin/sshd", "-D"]
