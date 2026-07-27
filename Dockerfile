@@ -254,7 +254,11 @@ RUN chmod 755 /usr/local/bin/dotfiles && dotfiles version
 # toolchain in the image for no benefit. Nothing needs it: every write path in
 # `scripts/update` already runs under sudo (which is passwordless here), and
 # /opt/hermes-webui — the one tree updated without sudo — is chowned at its own step.
-RUN chown -R ${USERNAME}:${USERNAME} /usr/local/bin
+#
+# /opt itself is chowned non-recursively — one inode, no copy-up — so a tool can
+# still create its own directory there without sudo. Existing bundles under it stay
+# root-owned.
+RUN chown -R ${USERNAME}:${USERNAME} /usr/local/bin && chown ${USERNAME}:${USERNAME} /opt
 
 # Expose default SSH port inside container
 EXPOSE 22

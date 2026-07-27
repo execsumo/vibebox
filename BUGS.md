@@ -74,10 +74,21 @@ each changed file into a new layer. Recursing over `/usr/local/lib/node_modules`
 (every npm global) plus the codegraph bundle and hermes-webui venv duplicated the
 whole toolchain in the image.
 
-**Fix:** narrowed to `/usr/local/bin`. Nothing needed the wider scope — every write
-path in `scripts/update` runs under `sudo`, and `/opt/hermes-webui`, the one tree
-updated without sudo, is chowned at its own install step. Size saving is unmeasured
-(no Docker available); the reasoning is that the layer should now be kilobytes.
+**Fix:** narrowed to `/usr/local/bin`, plus a non-recursive chown of `/opt` itself so
+a tool can still create its own directory there. Nothing needed the wider scope —
+every write path in `scripts/update` runs under `sudo`, and `/opt/hermes-webui`, the
+one tree updated without sudo, is chowned at its own install step. Size saving is
+unmeasured (no Docker available); the reasoning is that the layer should now be
+kilobytes.
+
+**Watch on first onboard.** `scripts/onboard` runs as the sandbox user with no sudo
+anywhere in it. `dotfiles init`/`link` and `rtk init` write under `$HOME`, and
+`codegraph install` is documented as a per-user config step (the bundle itself is
+installed to `/opt/codegraph` at build time) — so none of them should need the
+ownership that was removed. This has not been exercised. If `codegraph install`
+starts warning after this change, that assumption was wrong: `sudo chown -R
+"$USER" /opt/codegraph` in the box confirms it, and the fix is to chown that tree at
+its install step the way step 8b does for hermes-webui.
 
 ### SSH host identity was in no backup at all
 
