@@ -66,6 +66,15 @@ RUN (curl -fsSL https://example.com/install.sh | bash && \
 ### apt package
 Add to the existing `apt-get install -y` block (step 1).
 
+> **Ownership note.** Only `/usr/local/bin` is chowned to the sandbox user. The rest of
+> `/usr/local` (notably `lib/node_modules`) and `/opt` stay root-owned — chowning them
+> recursively duplicated the entire toolchain into a fresh image layer for no gain.
+> So an install or update step that writes anywhere other than `/usr/local/bin` must
+> run under `sudo`, which is passwordless here and is what every step in
+> `scripts/update` already does. If a tool must be updated *without* sudo (like
+> hermes-webui, whose `update` step does a plain `git pull`), chown that one directory
+> at its own install step, the way step 8b does.
+
 ### Wrapper script on `$PATH`
 When the "tool" is really a shortcut — delegating to a sidecar container, or to a
 long path inside `/opt` — add a file to `scripts/`. `COPY scripts/ /usr/local/bin/`

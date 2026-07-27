@@ -260,6 +260,8 @@ backup
 backup before-refactor
 ```
 
+This one covers home only — it runs as the sandbox user, which cannot read the root-owned host keys. Use the host-side scripts below if you want the SSH identity in the archive.
+
 **Create a backup** (from the host):
 
 ```powershell
@@ -288,7 +290,19 @@ backup before-refactor
 ./restore.sh before-refactor
 ```
 
-A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them; SSH host keys live on their own volume and are untouched by backup/restore). Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`, `auto-before-update`) are kept until you delete them.
+**Restore the SSH host identity too** — only when you mean it, e.g. rebuilding on a new host:
+
+```powershell
+.\restore.ps1 before-refactor -RestoreIdentity     # Windows
+```
+
+```bash
+./restore.sh before-refactor --restore-identity    # Linux/macOS
+```
+
+A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them), plus the SSH host keys under `ssh-identity/`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again.
+
+The host identity is **not** restored unless you ask for it: by default the sandbox keeps the identity it already has, so a restore never triggers "host key changed" warnings on your clients. Passing `--restore-identity` adopts the archived keys instead — expect each client to warn once. Archives made before this existed have no `ssh-identity/` entry; the flag then reports that and leaves the current identity alone. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`, `auto-before-update`) are kept until you delete them.
 
 ### Update tools
 
@@ -300,12 +314,16 @@ Upgrades all in-container tools (APT packages, npm globals, Bun, RTK, Herdr, Her
 
 ### Docker and Tailscale from inside the box
 
-`docker` and `docker compose` work inside the sandbox. They talk to the **host's**
-Docker daemon over the bind-mounted `/var/run/docker.sock` — so containers you start
-are siblings of the sandbox, not children of it. Two consequences worth knowing:
-bind-mount paths you pass to `docker run` are resolved on the *host*, not in the
-sandbox, and anything you start this way outlives `docker compose down`. See
-[Security Notes](#security-notes) — this mount is deliberately a hole in the sandbox.
+`docker` and `docker compose` work inside the sandbox. There is no daemon running in
+the container — they talk to the **host's** Docker daemon over the bind-mounted
+`/var/run/docker.sock`, so containers you start are siblings of the sandbox, not
+children of it. Two consequences worth knowing: bind-mount paths you pass to
+`docker run` are resolved on the *host*, not in the sandbox, and anything you start
+this way outlives `docker compose down`. See [Security Notes](#security-notes) —
+this mount is deliberately a hole in the sandbox.
+
+If the socket is not mounted, the entrypoint says so at boot and `docker` is simply
+unavailable; it does not silently fall back to anything.
 
 `tailscale` is also on `$PATH`, as a wrapper that runs the real CLI in the sidecar
 container that owns the network namespace:
@@ -332,7 +350,9 @@ It shells out to `docker`, so it depends on that same socket being mounted.
 
 Everything else comes from the image and is disposable. Anything you install with `apt` or `sudo cp` works for the life of the container but is **not** persisted — to make a tool or package durable, add it to the Dockerfile and rebuild. The in-container `update` command upgrades tools in place, but those changes reset on the next `down`/`up`; treat `docker compose up -d --build` as the durable update path.
 
-SSH host keys are generated once on first boot into a dedicated volume (`/opt/vibebox/ssh`), so rebuilds — and restores — keep the same identity: no "host key changed" warnings. Keeping them off the home volume is what makes them survive a restore, but it also means **backups do not contain them**: `backup` archives home only. If you delete the `<SANDBOX_NAME>-ssh-keys` volume or move to a new host, the sandbox generates a fresh identity and every client warns once about the changed host key. Copy the volume yourself if that matters to you.
+SSH host keys are generated once on first boot into a dedicated volume (`/opt/vibebox/ssh`), so rebuilds — and restores — keep the same identity: no "host key changed" warnings. Keeping them off the home volume is what makes them survive a restore.
+
+They are still captured by `backup.sh` / `backup.ps1`, under `ssh-identity/` in the archive, so losing the volume does not lose the identity for good. Restore deliberately **does not** put them back by default — that would undo the very property above — so use `--restore-identity` (or `-RestoreIdentity` on Windows) when you actually want the archived identity, e.g. when moving the sandbox to a new host. See [Backups and restore](#backups-and-restore).
 
 **Two distinctions worth knowing:**
 
@@ -466,6 +486,8 @@ ANTHROPIC_API_KEY=sk-ant-...
 
 Any variable works, not a fixed list — `.env` is loaded wholesale into the sandbox, and the entrypoint republishes it to SSH sessions through `~/.ssh/environment` (sshd does not inherit the container's environment on its own). So `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or anything else you add is visible to interactive shells, `ssh vibebox <cmd>`, and Remote-SSH alike.
 
+**Two exceptions.** `TS_AUTHKEY` and `HERMES_WEBUI_PASSWORD` are infrastructure credentials consumed by docker-compose and the entrypoint, never by a shell — so they are held back from `~/.ssh/environment`. A reusable tailnet auth key can enrol new devices, and there is no reason every process in the box should hold one. If you add another credential in that category, add it to the skip list in `scripts/entrypoint` alongside them.
+
 Two caveats. Session-scoped variables (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, …) are skipped — the shell owns those, and exporting the container's copies would break logins. And the file is rewritten on every container start, so a key is picked up by `docker compose up -d` and disappears once you delete it from `.env` and restart.
 
 The file is mode `0600` and owned by the sandbox user. Note that this puts your keys on the persisted home volume, so they land in backup archives — see [Security Notes](#security-notes).
@@ -474,7 +496,9 @@ The file is mode `0600` and owned by the sandbox user. Note that this puts your 
 
 - Backups archive your home directory only — no longer `/etc/shadow` or system secrets. They still contain whatever lives under `$HOME`: `gh`/Claude/Codex auth tokens, shell history, and any private keys you keep there. Treat backup archives as private secrets.
 - The sandbox runs with passwordless `sudo`. A tagged Tailscale auth key (`tag:vibebox`, see [Step 2](#step-2--get-a-tailscale-auth-key-required)) lets tailnet ACLs bound what a compromised sandbox can reach.
-- **The sandbox is not a security boundary against the host.** `docker` inside the box is Docker-*out*-of-Docker: the host's `/var/run/docker.sock` is bind-mounted in, and the container runs `privileged: true`. Control of that socket is equivalent to root on the Docker host — anything in the sandbox, including an agent acting on its own, can start a container that mounts the host filesystem. The entrypoint also relaxes the socket to mode `0666` so the non-root sandbox user can reach it. This is the cost of running builds and compose stacks inside the box. If you do not need it, removing the socket mount alone is not enough — the entrypoint then falls through to starting a local daemon, which fails silently in a non-privileged container and leaves you with a `docker` command and no daemon. Drop the socket mount, `privileged: true`, *and* the daemon-startup block in `scripts/entrypoint` together. Treat the sandbox as a convenience boundary — a place to keep agent mess contained — not as containment for code you actively distrust.
+- **The sandbox is not a security boundary against the host.** `docker` inside the box is Docker-*out*-of-Docker: the host's `/var/run/docker.sock` is bind-mounted in. Control of that socket is equivalent to root on the Docker host — anything in the sandbox, including an agent acting on its own, can start a container that mounts the host filesystem. This is the cost of running builds and compose stacks inside the box; if you do not want it, remove the `/var/run/docker.sock` mount from `docker-compose.yml` and the sandbox simply has no daemon to talk to (the entrypoint says so at boot rather than leaving you to discover it). Treat the sandbox as a convenience boundary — a place to keep agent mess contained — not as containment for code you actively distrust.
+- The container does **not** run privileged, and the socket is left at mode `0660` wherever possible: the entrypoint re-points the container's `docker` group at the gid the socket actually carries, which is what makes group access work at all. On hosts that expose a root-owned socket with no distinct group (Docker Desktop, OrbStack), that alignment is impossible and the entrypoint falls back to mode `0666`, announcing it at boot. That fallback widens access to every user in the container — in practice only the sandbox user, but worth knowing.
+- `TS_AUTHKEY` and `HERMES_WEBUI_PASSWORD` are deliberately **not** forwarded into shell sessions (see [API Keys](#api-keys)). Everything else in `.env` is.
 - Tool versions default to `latest`. Pin versions in `.env` and rebuild if you need to recreate a known-good environment.
 
 ### Management Commands
