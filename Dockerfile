@@ -241,7 +241,7 @@ ARG DOTTER_REPO=execsumo/dotter
 ARG DOTTER_REF=main
 ADD https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles \
     /usr/local/bin/dotfiles
-RUN chmod +x /usr/local/bin/dotfiles && dotfiles version
+RUN chmod 755 /usr/local/bin/dotfiles && dotfiles version
 
 # Make /usr/local and /opt owned by the sandbox user so tool installers, global packages, and dotfiles can write freely without sudo
 RUN chown -R ${USERNAME}:${USERNAME} /usr/local /opt
