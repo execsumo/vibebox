@@ -208,6 +208,9 @@ RUN set -eux; \
     else \
       groupadd -g 1000 "${USERNAME}"; \
     fi; \
+    # Placeholder gid — the host's docker socket almost certainly uses a different
+    # one, and group access to a bind-mounted socket is decided by the *host's* gid.
+    # The entrypoint re-points this group at the socket's real gid at boot.
     getent group docker >/dev/null || groupadd docker; \
     if getent passwd 1000 >/dev/null; then \
       EXISTING_USER="$(getent passwd 1000 | cut -d: -f1)"; \
@@ -243,8 +246,15 @@ ADD https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles 
     /usr/local/bin/dotfiles
 RUN chmod 755 /usr/local/bin/dotfiles && dotfiles version
 
-# Make /usr/local and /opt owned by the sandbox user so tool installers, global packages, and dotfiles can write freely without sudo
-RUN chown -R ${USERNAME}:${USERNAME} /usr/local /opt
+# Let the sandbox user drop binaries into /usr/local/bin without sudo — several tool
+# installers do exactly that. Deliberately NOT recursive over all of /usr/local and
+# /opt: chown rewrites the owner of every file it touches, and Docker copies each
+# changed file into a new layer, so recursing over /usr/local/lib/node_modules (every
+# npm global) plus the codegraph bundle and the hermes-webui venv duplicates the whole
+# toolchain in the image for no benefit. Nothing needs it: every write path in
+# `scripts/update` already runs under sudo (which is passwordless here), and
+# /opt/hermes-webui — the one tree updated without sudo — is chowned at its own step.
+RUN chown -R ${USERNAME}:${USERNAME} /usr/local/bin
 
 # Expose default SSH port inside container
 EXPOSE 22

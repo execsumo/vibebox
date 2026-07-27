@@ -85,7 +85,10 @@ services:
         - TAILWIND_LANGUAGE_SERVER_VERSION=${TAILWIND_LANGUAGE_SERVER_VERSION:-latest}
     container_name: ${SANDBOX_NAME:-vibebox}
     image: ${SANDBOX_NAME:-vibebox}:latest
-    privileged: true
+    # No `privileged: true` — it was only ever needed to run a nested daemon, and
+    # this stack talks to the host's docker daemon over the bind-mounted socket
+    # below instead. Adding it back grants the sandbox host-level capabilities it
+    # does not need.
     # Share the network namespace of the tailscale container
     network_mode: service:tailscale
     depends_on:

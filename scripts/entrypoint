@@ -66,6 +66,12 @@ while IFS= read -r -d '' kv; do
     # session; exporting the entrypoint's copies would point every login at root's
     # HOME and pin PATH to the build-time value.
     PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|SHLVL|TERM|MAIL|HOSTNAME|_) continue ;;
+    # Infrastructure credentials, not tool configuration. These are consumed by
+    # compose and by this script; no shell in the box has a use for them, and
+    # republishing them hands every process here the ability to enrol new devices
+    # on the tailnet or read the webui. API keys are a different case and still
+    # pass through — see the README's API Keys section.
+    TS_AUTHKEY|HERMES_WEBUI_PASSWORD) continue ;;
   esac
   # The file format is one NAME=value per line with no quoting or continuations,
   # so an embedded newline would silently corrupt every entry after it.
@@ -84,21 +90,39 @@ if [ -n "${SANDBOX_HOME_HOST_PATH:-}" ]; then
     "git config --global --get-all safe.directory 2>/dev/null | grep -qx '\*' || git config --global --add safe.directory '*'" || true
 fi
 
-# Handle Docker daemon startup & socket permissions.
-# On Windows host, docker compose bind-mounting /var/run/docker.sock creates a directory instead of a socket.
+# Docker-out-of-Docker: this sandbox drives the *host's* docker daemon through the
+# bind-mounted socket. There is deliberately no daemon inside the container — so if
+# the socket is missing, docker is simply unavailable and we say so, rather than
+# leaving a docker CLI on $PATH that fails later with "cannot connect to the daemon".
 if [ -d /var/run/docker.sock ]; then
-  rmdir /var/run/docker.sock 2>/dev/null || true
+  # Docker creates a *directory* at the mount point when the host path does not
+  # exist — routinely seen on Windows hosts. An empty one is ours to clear; a
+  # non-empty one is a real misconfiguration the user has to look at.
+  rmdir /var/run/docker.sock 2>/dev/null \
+    || echo "WARNING: /var/run/docker.sock is a non-empty directory, not a socket. Docker is unavailable in this sandbox."
 fi
 
 if [ -S /var/run/docker.sock ]; then
-  chown root:docker /var/run/docker.sock 2>/dev/null || true
-  chmod 666 /var/run/docker.sock 2>/dev/null || true
-elif command -v service >/dev/null 2>&1; then
-  service docker start >/dev/null 2>&1 || true
-  if [ -S /var/run/docker.sock ]; then
-    chown root:docker /var/run/docker.sock 2>/dev/null || true
+  # Access to a bind-mounted socket is decided by the *host's* gid, so a
+  # container-local `docker` group grants nothing. Re-point the group at the gid
+  # the socket actually carries; -o because that gid may already be taken here.
+  SOCK_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo '')"
+  DOCKER_GID="$(getent group docker | cut -d: -f3)"
+  if [ -n "$SOCK_GID" ] && [ "$SOCK_GID" != "0" ]; then
+    if [ "$SOCK_GID" != "$DOCKER_GID" ]; then
+      groupmod -o -g "$SOCK_GID" docker 2>/dev/null \
+        || echo "WARNING: could not align the docker group to gid $SOCK_GID; docker may be unusable for the sandbox user."
+    fi
+    chmod 660 /var/run/docker.sock 2>/dev/null || true
+  else
+    # gid 0: the socket is root-owned with no distinct group (Docker Desktop and
+    # OrbStack both do this). Group alignment would mean putting the sandbox user
+    # in the root group, which is worse than a permissive mode on the socket.
+    echo "NOTE: docker socket is group-root; falling back to mode 0666 so the sandbox user can reach it."
     chmod 666 /var/run/docker.sock 2>/dev/null || true
   fi
+else
+  echo "WARNING: /var/run/docker.sock is not mounted. The docker CLI is installed but has no daemon to talk to."
 fi
 
 # Start Hermes WebUI as the sandbox user if installed (daemonized via ctl.sh, so
