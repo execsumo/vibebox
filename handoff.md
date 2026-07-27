@@ -15,9 +15,9 @@ This document explains where each piece lives and what to touch when you add a n
 | `~/.dotfiles/dotfiles.manifest` | One line per new dotfile path (if the tool has config) — lives in your dotfiles repo, not here |
 | `README.md` | Coding tools table + dotfiles section + API Keys section (if needed) |
 
-The in-container commands (`onboard`, `backup`, `update`, `launch`) and the `entrypoint` are real files in `scripts/`, `COPY`'d to `/usr/local/bin` by the Dockerfile — edit them directly. Dotfile paths are **not** in this repo any more: they live in the manifest inside your own dotfiles repo, managed by [dotter](https://github.com/execsumo/dotter).
+The in-container commands (`onboard`, `backup`, `update`, `launch`, `tailscale`, `hermes-webui`) and the `entrypoint` are real files in `scripts/`, `COPY`'d to `/usr/local/bin` by the Dockerfile — edit them directly. Dotfile paths are **not** in this repo any more: they live in the manifest inside your own dotfiles repo, managed by [dotter](https://github.com/execsumo/dotter).
 
-If a tool is one you depend on daily, add it to the hard-fail loop in the Dockerfile's step 9b verification (`for t in claude codex bun node gh`); optional agents go in the warn loop. Anything installed with a tolerated (`|| echo ...`) step belongs in the warn loop — a hard-fail check on a tolerated install just relocates the build break.
+If a tool is one you depend on daily, add it to the hard-fail loop in the Dockerfile's step 9b verification (`for t in claude codex bun node gh docker`); optional agents go in the warn loop. Anything installed with a tolerated (`|| echo ...`) step belongs in the warn loop — a hard-fail check on a tolerated install just relocates the build break.
 
 
 ## Install step patterns
@@ -65,6 +65,34 @@ RUN (curl -fsSL https://example.com/install.sh | bash && \
 
 ### apt package
 Add to the existing `apt-get install -y` block (step 1).
+
+### Wrapper script on `$PATH`
+When the "tool" is really a shortcut — delegating to a sidecar container, or to a
+long path inside `/opt` — add a file to `scripts/`. `COPY scripts/ /usr/local/bin/`
+puts everything in that directory on `$PATH` automatically, so no Dockerfile install
+step is needed. Two exist today:
+
+```bash
+# scripts/tailscale — run the tailscale CLI in the sidecar that owns the netns
+exec docker exec -i "${SANDBOX_NAME:-vibebox}-tailscale" tailscale "$@"
+
+# scripts/hermes-webui — shorthand for the webui control script
+exec /opt/hermes-webui/ctl.sh "$@"
+```
+
+**You must add the new file to the explicit `chmod +x` list** in the Dockerfile right
+after the `COPY` — the execute bit does not survive a Windows/git checkout reliably,
+and that list is enumerated by name rather than globbed:
+
+```dockerfile
+RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup \
+             /usr/local/bin/update  /usr/local/bin/launch \
+             /usr/local/bin/hermes-webui /usr/local/bin/entrypoint /usr/local/bin/tailscale
+```
+
+Wrappers that shell out to `docker` (like `tailscale`) depend on the host Docker
+socket being mounted; they fail at call time, not build time, if it isn't. `SANDBOX_NAME`
+is passed into the container by docker-compose, so it resolves inside the sandbox.
 
 ### Tools with a per-user configuration step
 Some tools ship a `<tool> install` / `<tool> init` step that writes into `$HOME` (agent
@@ -164,5 +192,8 @@ Pin a tag or SHA there if you want reproducible builds.
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
 | GitHub CLI | apt (official repo) | `/usr/bin/gh` | apt upgrade | — |
 | Docker | apt (official repo) | `/usr/bin/docker` | apt upgrade | — |
+| btop, htop | apt | `/usr/bin/btop` | apt upgrade | — |
+| `tailscale` | wrapper script | `/usr/local/bin/tailscale` | edit `scripts/tailscale` | — |
+| `hermes-webui` | wrapper script | `/usr/local/bin/hermes-webui` | edit `scripts/hermes-webui` | — |
 
 Language servers (pyright, typescript-language-server, etc.) are all npm globals and are covered by `npm update -g`.

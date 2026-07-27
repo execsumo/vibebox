@@ -298,6 +298,25 @@ update
 
 Upgrades all in-container tools (APT packages, npm globals, Bun, RTK, Herdr, Hermes, CodeGraph, Hermes WebUI). It creates an `auto-before-update` backup first. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable.
 
+### Docker and Tailscale from inside the box
+
+`docker` and `docker compose` work inside the sandbox. They talk to the **host's**
+Docker daemon over the bind-mounted `/var/run/docker.sock` — so containers you start
+are siblings of the sandbox, not children of it. Two consequences worth knowing:
+bind-mount paths you pass to `docker run` are resolved on the *host*, not in the
+sandbox, and anything you start this way outlives `docker compose down`. See
+[Security Notes](#security-notes) — this mount is deliberately a hole in the sandbox.
+
+`tailscale` is also on `$PATH`, as a wrapper that runs the real CLI in the sidecar
+container that owns the network namespace:
+
+```bash
+tailscale status
+tailscale ip -4
+```
+
+It shells out to `docker`, so it depends on that same socket being mounted.
+
 ---
 
 ## Reference
@@ -406,6 +425,15 @@ SANDBOX_PIDS_LIMIT=1024
 
 These stop runaway agent loops, accidental recursive process spawning, and oversized installs from taking over the host. `1024` is a safe runaway guard that still leaves headroom for large builds — linkers, `jest`, and `cargo` spawn many short-lived processes. If you ever hit mysterious "Resource temporarily unavailable" errors during a heavy build, this limit is the first thing to raise.
 
+**Disk (Windows/WSL2 only):**
+
+```env
+SANDBOX_DEFAULT_VHD_SIZE=50GB
+SANDBOX_SPARSE_VHD=true
+```
+
+WSL2 keeps its filesystem in a virtual disk that grows up to a fixed ceiling. `setup-sandbox.ps1` writes both values into `~/.wslconfig` at build time. `SANDBOX_DEFAULT_VHD_SIZE` is that ceiling — raise it before you fill it, since growing it afterwards means resizing the VHD by hand. `SANDBOX_SPARSE_VHD=true` lets the disk file shrink on the host when you delete data inside it; without it the VHD only ever grows. Both apply to **newly created** WSL distributions, so changing them does not resize a distribution that already exists. They are ignored on Linux and macOS hosts.
+
 ### Tool Versions
 
 ```env
@@ -446,6 +474,7 @@ The file is mode `0600` and owned by the sandbox user. Note that this puts your 
 
 - Backups archive your home directory only — no longer `/etc/shadow` or system secrets. They still contain whatever lives under `$HOME`: `gh`/Claude/Codex auth tokens, shell history, and any private keys you keep there. Treat backup archives as private secrets.
 - The sandbox runs with passwordless `sudo`. A tagged Tailscale auth key (`tag:vibebox`, see [Step 2](#step-2--get-a-tailscale-auth-key-required)) lets tailnet ACLs bound what a compromised sandbox can reach.
+- **The sandbox is not a security boundary against the host.** `docker` inside the box is Docker-*out*-of-Docker: the host's `/var/run/docker.sock` is bind-mounted in, and the container runs `privileged: true`. Control of that socket is equivalent to root on the Docker host — anything in the sandbox, including an agent acting on its own, can start a container that mounts the host filesystem. The entrypoint also relaxes the socket to mode `0666` so the non-root sandbox user can reach it. This is the cost of running builds and compose stacks inside the box; if you do not need that, remove the socket mount and `privileged: true` from `docker-compose.yml`. Treat the sandbox as a convenience boundary — a place to keep agent mess contained — not as containment for code you actively distrust.
 - Tool versions default to `latest`. Pin versions in `.env` and rebuild if you need to recreate a known-good environment.
 
 ### Management Commands
@@ -490,8 +519,10 @@ Because one Tailscale node can only carry one hostname, the webui gets its own n
 The webui starts automatically on container boot. Inside the sandbox, manage it with:
 
 ```bash
-/opt/hermes-webui/ctl.sh status|logs|restart|stop
+hermes-webui status|logs|restart|stop
 ```
+
+(`hermes-webui` is a wrapper on `$PATH`; `/opt/hermes-webui/ctl.sh` works too.)
 
 Logs are at `~/.hermes/webui.log`.
 
