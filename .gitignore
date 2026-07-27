@@ -6,3 +6,4 @@ backups/
 *.tgz
 *.zip
 *.log
+.delegate/
