@@ -69,10 +69,24 @@ echo "${YELLOW}Retention:   $RetentionDays days${RESET}"
 # (home/<user>/...) and matches the in-container `backup` command. restore.sh
 # extracts it back. .vibebox holds onboard marker files that should re-run after a
 # restore, and SSH host keys live on their own volume — so it is excluded.
-if docker run --rm \
-    -v "${HomeMountSource}:/stage/home/${Username}:ro" \
-    -v "${BackupsDir}:/backup" \
-    alpine tar czf "/backup/$Filename" --exclude="home/${Username}/.vibebox" -C /stage "home/${Username}"; then
+DOCKER_ARGS=(
+    "--rm"
+    "-v" "${HomeMountSource}:/stage/home/${Username}:ro"
+    "-v" "${BackupsDir}:/backup"
+)
+TAR_ARGS=(
+    "czf" "/backup/$Filename"
+    "--exclude=home/${Username}/.vibebox"
+    "-C" "/stage"
+    "home/${Username}"
+)
+
+if docker volume inspect "${SandboxName}-ssh-keys" >/dev/null 2>&1; then
+    DOCKER_ARGS+=( "-v" "${SandboxName}-ssh-keys:/stage/ssh-identity:ro" )
+    TAR_ARGS+=( "ssh-identity" )
+fi
+
+if docker run "${DOCKER_ARGS[@]}" alpine tar "${TAR_ARGS[@]}"; then
 
     if [ ! -f "$BackupPath" ]; then
         echo ""

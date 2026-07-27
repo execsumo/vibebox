@@ -2,6 +2,7 @@
 # Usage:
 #   .\restore.ps1                 # Interactively select a backup
 #   .\restore.ps1 "before-llm"    # Restores '<sandbox>-backup-before-llm.tar.gz'
+#   .\restore.ps1 -RestoreIdentity # Also restores SSH host keys
 
 $ErrorActionPreference = "Stop"
 
@@ -67,7 +68,18 @@ if (-not (Test-Path $BackupsDir)) {
 }
 
 $SelectedFile = $null
-$SpecifiedName = $args[0]
+$SpecifiedName = ""
+$RestoreIdentity = $false
+
+foreach ($arg in $args) {
+    if ($arg -eq "-RestoreIdentity") {
+        $RestoreIdentity = $true
+    } elseif (-not $SpecifiedName) {
+        $SpecifiedName = $arg
+    } else {
+        throw "Unknown argument: $arg"
+    }
+}
 
 if ($SpecifiedName) {
     $Filename = Resolve-BackupName -SandboxName $SandboxName -SpecifiedName $SpecifiedName
@@ -125,6 +137,12 @@ if ($Filename -notmatch "^$EscapedSandboxName-backup-[a-zA-Z0-9_-]+\.tar\.gz$" -
     throw "Backup filename is not valid for this sandbox."
 }
 
+$HasIdentity = $false
+$tarOutput = docker run --rm -v "${BackupsDir}:/backup:ro" alpine tar tf "/backup/$Filename" 2>$null
+if ($tarOutput -match "^ssh-identity/") {
+    $HasIdentity = $true
+}
+
 Write-Host ""
 Write-Host "WARNING: Restoring will completely overwrite the home directory for this sandbox." -ForegroundColor Red
 Write-Host "Target Backup: backups\$SandboxName\$Filename" -ForegroundColor Yellow
@@ -152,16 +170,33 @@ try {
 set -e
 F="$1"
 U="$2"
+WIPE_IDENTITY="$3"
 HOME_DIR="/restore-stage/home/$U"
 find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+if [ "$WIPE_IDENTITY" = "1" ] && [ -d "/restore-stage/ssh-identity" ]; then
+    find "/restore-stage/ssh-identity" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
 tar xzf "/backup/$F" -C /restore-stage
 '@
     # Strip CR so the script is valid for busybox sh regardless of file line endings.
     $RestoreScript = $RestoreScript -replace "`r", ""
-    docker run --rm `
-        -v "${HomeMountSource}:/restore-stage/home/${Username}" `
-        -v "${BackupsDir}:/backup:ro" `
-        alpine sh -c $RestoreScript sh "$Filename" "$Username"
+    
+    $DockerArgs = @(
+        "--rm",
+        "-v", "${HomeMountSource}:/restore-stage/home/${Username}",
+        "-v", "${BackupsDir}:/backup:ro"
+    )
+    $WipeIdentity = "0"
+    if ($RestoreIdentity -and $HasIdentity) {
+        $DockerArgs += "-v", "${SandboxName}-ssh-keys:/restore-stage/ssh-identity"
+        $WipeIdentity = "1"
+    }
+
+    $AllArgs = @("run") + $DockerArgs + @("alpine", "sh", "-c", $RestoreScript, "sh", $Filename, $Username, $WipeIdentity)
+    & docker @AllArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Docker run failed with exit code $LASTEXITCODE"
+    }
 
     Write-Host "4/4 Restarting the workspace container..." -ForegroundColor Cyan
     docker compose start sandbox
@@ -169,6 +204,15 @@ tar xzf "/backup/$F" -C /restore-stage
     Write-Host ""
     Write-Host "Restore completed successfully." -ForegroundColor Green
     Write-Host "Sandbox '$SandboxName' has been rewound to: backups\$SandboxName\$Filename" -ForegroundColor Green
+    if ($RestoreIdentity) {
+        if ($HasIdentity) {
+            Write-Host "Notice: Host identity was replaced. Clients will warn once about a changed host key." -ForegroundColor Yellow
+        } else {
+            Write-Host "Notice: Archive does not contain ssh-identity/. Existing SSH host identity was kept." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Notice: Existing SSH host identity was kept. Use -RestoreIdentity if migrating to a new host." -ForegroundColor Yellow
+    }
 } catch {
     Write-Host ""
     Write-Host "ERROR: Restore failed: $_" -ForegroundColor Red

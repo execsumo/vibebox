@@ -64,10 +64,31 @@ try {
     # (home/<user>/...) and matches the in-container `backup` command. restore.ps1
     # extracts it back. .vibebox holds onboard marker files that should re-run after
     # a restore, and SSH host keys live on their own volume — so it is excluded.
-    docker run --rm `
-        -v "${HomeMountSource}:/stage/home/${Username}:ro" `
-        -v "${BackupsDir}:/backup" `
-        alpine tar czf "/backup/$Filename" --exclude="home/${Username}/.vibebox" -C /stage "home/${Username}"
+    $SshVolume = "${SandboxName}-ssh-keys"
+    docker volume inspect $SshVolume *>$null
+    $VolumeExists = $LASTEXITCODE -eq 0
+
+    $DockerArgs = @(
+        "--rm",
+        "-v", "${HomeMountSource}:/stage/home/${Username}:ro",
+        "-v", "${BackupsDir}:/backup"
+    )
+    if ($VolumeExists) {
+        $DockerArgs += "-v", "${SshVolume}:/stage/ssh-identity:ro"
+    }
+
+    $TarArgs = @(
+        "czf", "/backup/$Filename",
+        "--exclude=home/${Username}/.vibebox",
+        "-C", "/stage",
+        "home/${Username}"
+    )
+    if ($VolumeExists) {
+        $TarArgs += "ssh-identity"
+    }
+
+    $AllArgs = @("run") + $DockerArgs + @("alpine", "tar") + $TarArgs
+    & docker @AllArgs
 
     if (-not (Test-Path $BackupPath)) {
         throw "Backup file was not created successfully."

@@ -2,8 +2,8 @@
 # Bash script to restore the sandbox from a backup (Linux/macOS host).
 # Windows host: use restore.ps1 instead.
 # Usage:
-#   ./restore.sh                 # Interactively select a backup
-#   ./restore.sh before-llm      # Restores '<sandbox>-backup-before-llm.tar.gz'
+#   ./restore.sh [--restore-identity]                 # Interactively select a backup
+#   ./restore.sh [--restore-identity] before-llm      # Restores '<sandbox>-backup-before-llm.tar.gz'
 
 set -uo pipefail
 
@@ -76,7 +76,18 @@ if [ ! -d "$BackupsDir" ]; then
 fi
 
 SelectedFile=""
-SpecifiedName="${1:-}"
+SpecifiedName=""
+RestoreIdentity=0
+for arg in "$@"; do
+    if [ "$arg" = "--restore-identity" ]; then
+        RestoreIdentity=1
+    elif [ -z "$SpecifiedName" ]; then
+        SpecifiedName="$arg"
+    else
+        echo "${RED}ERROR: Unknown argument: $arg${RESET}" >&2
+        exit 1
+    fi
+done
 
 if [ -n "$SpecifiedName" ]; then
     Filename="$(resolve_backup_name "$SandboxName" "$SpecifiedName")"
@@ -140,6 +151,11 @@ if ! is_valid_backup_name "$SandboxName" "$Filename"; then
     exit 1
 fi
 
+HasIdentity=0
+if docker run --rm -v "${BackupsDir}:/backup:ro" alpine tar tf "/backup/$Filename" 2>/dev/null | grep -q "^ssh-identity/"; then
+    HasIdentity=1
+fi
+
 echo ""
 echo "${RED}WARNING: Restoring will completely overwrite the home directory for this sandbox.${RESET}"
 echo "${YELLOW}Target Backup: backups/$SandboxName/$Filename${RESET}"
@@ -158,8 +174,12 @@ read -r -d '' RESTORE_SCRIPT <<'EOF' || true
 set -e
 F="$1"
 U="$2"
+WIPE_IDENTITY="$3"
 HOME_DIR="/restore-stage/home/$U"
 find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+if [ "$WIPE_IDENTITY" = "1" ] && [ -d "/restore-stage/ssh-identity" ]; then
+    find "/restore-stage/ssh-identity" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+fi
 tar xzf "/backup/$F" -C /restore-stage
 EOF
 
@@ -183,10 +203,18 @@ if ! docker compose stop sandbox; then
 fi
 
 echo "${CYAN}3/4 Wiping current active files, including hidden files, and extracting backup...${RESET}"
-if docker run --rm \
-    -v "${HomeMountSource}:/restore-stage/home/${Username}" \
-    -v "${BackupsDir}:/backup:ro" \
-    alpine sh -c "$RESTORE_SCRIPT" sh "$Filename" "$Username"; then
+DOCKER_ARGS=(
+    "--rm"
+    "-v" "${HomeMountSource}:/restore-stage/home/${Username}"
+    "-v" "${BackupsDir}:/backup:ro"
+)
+WipeIdentity=0
+if [ "$RestoreIdentity" = "1" ] && [ "$HasIdentity" = "1" ]; then
+    DOCKER_ARGS+=( "-v" "${SandboxName}-ssh-keys:/restore-stage/ssh-identity" )
+    WipeIdentity=1
+fi
+
+if docker run "${DOCKER_ARGS[@]}" alpine sh -c "$RESTORE_SCRIPT" sh "$Filename" "$Username" "$WipeIdentity"; then
 
     echo "${CYAN}4/4 Restarting the workspace container...${RESET}"
     docker compose start sandbox
@@ -194,6 +222,15 @@ if docker run --rm \
     echo ""
     echo "${GREEN}Restore completed successfully.${RESET}"
     echo "${GREEN}Sandbox '$SandboxName' has been rewound to: backups/$SandboxName/$Filename${RESET}"
+    if [ "$RestoreIdentity" = "1" ]; then
+        if [ "$HasIdentity" = "1" ]; then
+            echo "${YELLOW}Notice: Host identity was replaced. Clients will warn once about a changed host key.${RESET}"
+        else
+            echo "${YELLOW}Notice: Archive does not contain ssh-identity/. Existing SSH host identity was kept.${RESET}"
+        fi
+    else
+        echo "${YELLOW}Notice: Existing SSH host identity was kept. Use --restore-identity if migrating to a new host.${RESET}"
+    fi
 else
     echo ""
     echo "${RED}ERROR: Restore failed.${RESET}" >&2
