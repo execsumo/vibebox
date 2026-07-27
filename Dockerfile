@@ -48,6 +48,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zsh \
     && rm -rf /var/lib/apt/lists/*
 
+# 1b. Disable the zsh-newuser-install first-run wizard. An interactive zsh that
+# finds no startup files (~/.zshenv/.zprofile/.zshrc/.zlogin) launches it — on a
+# fresh box that was the first thing shown on the initial SSH connection. Shell
+# config here is owned by `onboard` + the dotfiles tool, so the wizard is noise.
+# The wizard lives in scripts/newuser, sourced by the zsh/newuser module only
+# when ~/.zshrc is absent; with the script gone the module is a silent no-op.
+# (Unloading the module in /etc/zsh/zshrc does NOT work: the module loads
+# lazily, only after the global zshrc has already run.) Touches no user dotfiles.
+RUN rm -f /usr/share/zsh/*/scripts/newuser
+
 # 2. Install GitHub CLI (gh) via official repository
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
