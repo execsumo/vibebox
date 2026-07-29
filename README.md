@@ -488,6 +488,8 @@ Any variable works, not a fixed list — `.env` is loaded wholesale into the san
 
 **Two exceptions.** `TS_AUTHKEY` and `HERMES_WEBUI_PASSWORD` are infrastructure credentials consumed by docker-compose and the entrypoint, never by a shell — so they are held back from `~/.ssh/environment`. A reusable tailnet auth key can enrol new devices, and there is no reason every process in the box should hold one. If you add another credential in that category, add it to the skip list in `scripts/entrypoint` alongside them.
 
+`HERMES_WEBUI_PASSWORD` has one narrower outlet: the entrypoint writes it, with the boot host/port, to `/opt/hermes-webui/.env` (mode `0600`, the file `ctl.sh` already reads). Without it, `hermes-webui start` from inside the box would come back up on `127.0.0.1` and unauthenticated, since no session can supply the password. Only the webui reads that file — unlike `~/.ssh/environment`, which puts a value in every process's environment.
+
 Two caveats. Session-scoped variables (`PATH`, `HOME`, `USER`, `SHELL`, `TERM`, …) are skipped — the shell owns those, and exporting the container's copies would break logins. And the file is rewritten on every container start, so a key is picked up by `docker compose up -d` and disappears once you delete it from `.env` and restart.
 
 The file is mode `0600` and owned by the sandbox user. Note that this puts your keys on the persisted home volume, so they land in backup archives — see [Security Notes](#security-notes).
@@ -543,12 +545,16 @@ Because one Tailscale node can only carry one hostname, the webui gets its own n
 The webui starts automatically on container boot. Inside the sandbox, manage it with:
 
 ```bash
-hermes-webui status|logs|restart|stop
+hermes-webui status|logs|restart|stop|start
 ```
 
 (`hermes-webui` is a wrapper on `$PATH`; `/opt/hermes-webui/ctl.sh` works too.)
 
+`start` and `restart` need no arguments: the entrypoint records the boot host/port and password in `/opt/hermes-webui/.env`, so a hand-restarted webui comes back on the same tailnet-facing bind with authentication intact (see [API Keys](#api-keys)).
+
 Logs are at `~/.hermes/webui.log`.
+
+**`onboard` pauses the webui.** If your dotfiles manifest tracks `.hermes`, `onboard` stops the webui while `dotfiles link` runs and starts it again afterwards. On a bind-mounted home (`SANDBOX_HOME_HOST_PATH`) the link *cannot* succeed otherwise — 9p refuses to rename a directory whose files the daemon holds open, reporting it as `Permission denied`.
 
 ---
 

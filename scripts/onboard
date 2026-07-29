@@ -66,9 +66,46 @@ else
 
   # No --yes: if the repo does not exist yet, creating it on GitHub is an
   # outward-facing action and should stay an explicit human confirmation.
-  if dotfiles init --repo "$REPO" && dotfiles link; then
-    # Re-source zshrc if we're in zsh
-    [ -n "${ZSH_VERSION:-}" ] && [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
+  if dotfiles init --repo "$REPO"; then
+    # `link` renames any real file or directory it collides with to <name>.bak
+    # before symlinking the repo copy in. For a tracked ~/.hermes that rename
+    # fails with "Permission denied" while the Hermes WebUI is running — but
+    # only when home is a host bind mount (SANDBOX_HOME_HOST_PATH): 9p/drvfs
+    # carries Windows semantics, where a directory holding open file handles
+    # (the daemon's webui.log and state.db-wal) cannot be renamed at all. A
+    # named-volume home renames it happily. So pause the daemon — started at
+    # boot by the entrypoint — for the seconds the link takes.
+    WEBUI_PID_FILE="${HERMES_WEBUI_PID_FILE:-${HERMES_HOME:-$HOME/.hermes}/webui.pid}"
+    WEBUI_PAUSED=0
+    if [ -x /opt/hermes-webui/ctl.sh ] && [ -s "$WEBUI_PID_FILE" ]; then
+      echo "  Pausing Hermes WebUI while dotfiles are linked..."
+      /opt/hermes-webui/ctl.sh stop >/dev/null 2>&1 || true
+      WEBUI_PAUSED=1
+    fi
+
+    LINK_OK=0
+    dotfiles link && LINK_OK=1
+
+    if [ "$WEBUI_PAUSED" -eq 1 ]; then
+      # No env passed: the binding and password come from /opt/hermes-webui/.env,
+      # which the entrypoint writes with what it used at boot. HERMES_WEBUI_PASSWORD
+      # is not in this shell's environment (the entrypoint withholds it), so
+      # passing it through explicitly would resume the webui *unauthenticated*
+      # on its tailnet-facing bind.
+      if /opt/hermes-webui/ctl.sh start >/dev/null 2>&1; then
+        ok "Hermes WebUI restarted"
+      else
+        warn "Hermes WebUI did not resume — start it manually: hermes-webui start"
+      fi
+    fi
+
+    if [ "$LINK_OK" -eq 1 ]; then
+      # Re-source zshrc if we're in zsh
+      [ -n "${ZSH_VERSION:-}" ] && [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
+    else
+      warn "Dotfiles step did not complete — re-run 'onboard', or debug with:"
+      warn "  dotfiles status"
+    fi
   else
     warn "Dotfiles step did not complete — re-run 'onboard', or debug with:"
     warn "  dotfiles status"

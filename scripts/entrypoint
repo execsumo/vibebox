@@ -132,6 +132,41 @@ fi
 # compose environment and is effectively required for the non-localhost bind.
 if [ -x /opt/hermes-webui/ctl.sh ]; then
   SANDBOX_USER="$(getent passwd 1000 | cut -d: -f1)"
+
+  # Record the boot binding where ctl.sh already looks for it (its own repo
+  # .env, the mechanism upstream documents). Without this, `hermes-webui start`
+  # from a shell in the box comes back up on 127.0.0.1 *and unauthenticated* —
+  # HERMES_WEBUI_PASSWORD is deliberately withheld from ~/.ssh/environment
+  # above, so no session can supply it. `onboard` depends on this file when it
+  # pauses the webui to link ~/.hermes. Narrower than republishing the password
+  # to every process: 0600, and only the webui reads it. Rewritten each boot, so
+  # a password removed from .env stops being honoured here too.
+  WEBUI_ENV=/opt/hermes-webui/.env
+  # umask for the create, chmod for a file an operator wrote by hand (upstream
+  # documents appending to this same .env) — the password must not land in it
+  # at whatever mode that left behind.
+  if (umask 077; : > "$WEBUI_ENV") 2>/dev/null; then
+    chmod 600 "$WEBUI_ENV" 2>/dev/null || true
+    chown 1000:1000 "$WEBUI_ENV" 2>/dev/null || true
+    {
+      printf 'HERMES_WEBUI_HOST=%s\n' "${HERMES_WEBUI_HOST:-0.0.0.0}"
+      printf 'HERMES_WEBUI_PORT=8787\n'
+    } >> "$WEBUI_ENV"
+    case "${HERMES_WEBUI_PASSWORD:-}" in
+      '') ;;
+      # One NAME=value per line with no continuations: an embedded newline would
+      # truncate the password and silently change what the webui accepts.
+      *$'\n'*) echo "skipping HERMES_WEBUI_PASSWORD in $WEBUI_ENV (value contains a newline)" ;;
+      # ctl.sh parses the quoted form without expanding it, so only the quote
+      # and the escape character itself need escaping — \$ would survive as a
+      # literal backslash-dollar and corrupt the password.
+      *) printf 'HERMES_WEBUI_PASSWORD="%s"\n' \
+           "$(printf '%s' "$HERMES_WEBUI_PASSWORD" | sed 's/[\\"]/\\&/g')" >> "$WEBUI_ENV" ;;
+    esac
+  else
+    echo "WARNING: could not write $WEBUI_ENV; 'hermes-webui start' in the box will lose the password."
+  fi
+
   runuser -u "$SANDBOX_USER" -- env \
     HOME="$SANDBOX_HOME" \
     HERMES_WEBUI_HOST="${HERMES_WEBUI_HOST:-0.0.0.0}" \

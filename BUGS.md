@@ -9,6 +9,28 @@ none of it has been exercised by a real build or boot. The first `docker compose
 
 ## Fixed Bugs
 
+### `onboard`: "cannot move '~/.hermes' to '~/.hermes.bak': Permission denied"
+
+**Root cause:** not a permission problem at all. With `SANDBOX_HOME_HOST_PATH` set,
+`$HOME` is a 9p/drvfs mount of a host folder, and 9p carries Windows semantics: a
+directory holding open file handles cannot be renamed, and the refusal surfaces as
+`EACCES`. The Hermes WebUI starts at boot and keeps `webui.log` and `state.db-wal`
+open under `~/.hermes`, so `dotfiles link` — which renames a colliding path to
+`<name>.bak` before symlinking the repo copy in — could never move it aside. Ownership
+was correct throughout (`dev:dev`, parent `drwxrwxrwx`), which is what makes the error
+message so misleading.
+
+**Where it reproduced:** first `onboard` on a bind-mounted home whose dotfiles manifest
+tracks `.hermes`. A named-volume home is unaffected — ext4 renames a busy directory
+happily, so this never appears on the default setup or on a Linux host.
+
+**Fix:** `onboard` pauses the webui for the seconds the link takes and starts it again
+afterwards. Resuming needed the password, which the entrypoint deliberately withholds
+from shell sessions — so the entrypoint now also records the boot binding and password
+in `/opt/hermes-webui/.env` (mode `0600`, the mechanism `ctl.sh` already reads). That
+independently fixes `hermes-webui start` from inside the box, which until now came back
+up on `127.0.0.1` **and unauthenticated**.
+
 ### `dotfiles`: "Permission denied" inside the container
 
 **Root cause:** Docker's `ADD` of a remote URL creates the file `600` (root-only).

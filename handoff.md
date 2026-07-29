@@ -195,7 +195,7 @@ Pin a tag or SHA there if you want reproducible builds.
 | Pi | npm global (tolerated, `--ignore-scripts`) | `/usr/local/bin/pi` | `npm update -g` | `.pi/` |
 | RTK | install script | `/usr/local/bin/rtk` | re-run installer (update step 6) | `.config/rtk/` |
 | Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
-| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 10) | state under `.hermes/webui/` |
+| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 10) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
 | CodeGraph | install script (bundle in `/opt/codegraph`) | `/usr/local/bin/codegraph` → symlink into bundle | re-run installer via `update` (not `codegraph upgrade`) | — (per-project `.codegraph/`) |
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
