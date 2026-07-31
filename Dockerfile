@@ -118,23 +118,14 @@ RUN (curl -fsSL https://herdr.dev/install.sh | sh && \
      (cp /root/.local/bin/herdr /usr/local/bin/herdr 2>/dev/null || true) && \
      chmod +x /usr/local/bin/herdr 2>/dev/null) || echo "Herdr CLI setup skipped"
 
-# 7. Install RTK (Rust Token Killer) via the official installer.
-# Reduces LLM token consumption by 60-90% by filtering/compressing command outputs
-# before they reach the agent's context. `onboard` runs `rtk init` per-agent (writes
-# per-user config into $HOME, so it cannot be baked into the image — same reason as
-# CodeGraph).
-RUN (curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh && \
-     (cp /root/.local/bin/rtk /usr/local/bin/rtk 2>/dev/null || true) && \
-     chmod +x /usr/local/bin/rtk 2>/dev/null) || echo "RTK setup skipped"
-
-# 8. Install Hermes Agent via the official installer.
+# 7. Install Hermes Agent via the official installer.
 # Running as root, the installer uses root-mode and lands the binary in /usr/local/bin
 # directly; the cp is a fallback in case it takes the per-user (~/.local/bin) path.
 RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && \
      (cp /root/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true) && \
      chmod +x /usr/local/bin/hermes 2>/dev/null) || echo "Hermes Agent setup skipped or requires manual auth"
 
-# 8b. Install Hermes WebUI (web frontend for the Hermes Agent installed in step 8).
+# 7b. Install Hermes WebUI (web frontend for the Hermes Agent installed in step 7).
 # Cloned into /opt (image-managed) so a rebuild updates agent + webui together —
 # upstream warns against version skew between the two. Runtime state (sessions,
 # pid, logs) lands in ~/.hermes/webui on the persisted home volume. Owned by the
@@ -145,7 +136,7 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
      /opt/hermes-webui/.venv/bin/pip install --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
      chown -R 1000:1000 /opt/hermes-webui) || echo "Hermes WebUI setup skipped"
 
-# 9. Install CodeGraph — last tool step, since `codegraph install` wires itself into
+# 8. Install CodeGraph — last tool step, since `codegraph install` wires itself into
 # whichever agent CLIs are present and should see the full set installed above.
 # NOTE: `codegraph install` is NOT run here. It writes per-user agent config into $HOME
 # (e.g. ~/.claude.json), and $HOME is a persisted volume that masks image content on
@@ -161,12 +152,12 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
        env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
      chmod -R a+rX /opt/codegraph) || echo "CodeGraph setup skipped"
 
-# 9b. Verify installs so a build cannot silently succeed with tooling missing.
+# 8b. Verify installs so a build cannot silently succeed with tooling missing.
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
     for t in claude codex bun node gh docker; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
-    for t in agy herdr rtk hermes codegraph codeburn pi; do \
+    for t in agy herdr hermes codegraph codeburn pi; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! "$t" --version >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \

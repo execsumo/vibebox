@@ -14,7 +14,7 @@ Five steps from clone to coding:
 2. **Add your SSH public key** to `authorized_keys` (required).
 3. **Set `HERMES_WEBUI_PASSWORD`** in `.env` (only if you want the Hermes WebUI).
 4. **Run the setup script** — builds and starts the container stack.
-5. **SSH in and run `onboard`** — wires up GitHub auth, git identity, dotfiles, RTK, and CodeGraph.
+5. **SSH in and run `onboard`** — wires up GitHub auth, git identity, dotfiles, and CodeGraph.
 
 Details on each step below.
 
@@ -33,7 +33,6 @@ Details on each step below.
 | Pi (`pi`) | AI coding agent (Earendil Works) |
 | Hermes Agent | AI coding agent (Nous Research) |
 | Hermes WebUI | Web frontend for Hermes Agent, served at `https://hermes.<tailnet>.ts.net` |
-| RTK | Token-reducing command wrapper — hooks into each agent CLI, wired up by `onboard` |
 | CodeGraph | Code-index MCP server for the agent CLIs — wired up by `onboard` |
 | codeburn | AI spend tracker (by task, tool, model, project) |
 | Node.js + npm | LTS (v22 by default) |
@@ -218,10 +217,9 @@ This one-time script personalizes the sandbox. It is idempotent — safe to re-r
 1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
 2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
 3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
-4. **RTK wiring** — runs `rtk init` for each installed global-scope agent CLI (Claude Code, Codex, Hermes, Pi), installing the hook that compresses command output before it reaches the agent's context
-5. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
+4. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
 
-Details on RTK and CodeGraph are in the [RTK](#rtk) and [CodeGraph](#codegraph) sections.
+Details on CodeGraph are in the [CodeGraph](#codegraph) section.
 
 ---
 
@@ -310,7 +308,7 @@ The host identity is **not** restored unless you ask for it: by default the sand
 update
 ```
 
-Upgrades all in-container tools (APT packages, npm globals, Bun, RTK, Herdr, Hermes, CodeGraph, Hermes WebUI). It creates an `auto-before-update` backup first. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable.
+Upgrades all in-container tools (APT packages, npm globals, Bun, Herdr, Hermes, CodeGraph, Hermes WebUI). It creates an `auto-before-update` backup first. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable.
 
 ### Docker and Tailscale from inside the box
 
@@ -555,41 +553,6 @@ hermes-webui status|logs|restart|stop|start
 Logs are at `~/.hermes/webui.log`.
 
 **`onboard` pauses the webui.** If your dotfiles manifest tracks `.hermes`, `onboard` stops the webui while `dotfiles link` runs and starts it again afterwards. On a bind-mounted home (`SANDBOX_HOME_HOST_PATH`) the link *cannot* succeed otherwise — 9p refuses to rename a directory whose files the daemon holds open, reporting it as `Permission denied`.
-
----
-
-## RTK
-
-RTK intercepts Bash commands the agents run and rewrites them to token-efficient
-equivalents, cutting the output that lands in context. `onboard` wires it into every
-global-scope agent CLI it finds installed, records a marker at `~/.vibebox/rtk-initialized`,
-and skips on later runs. Wire up an agent by hand after adding one:
-
-```bash
-rtk init -g --auto-patch                  # Claude Code (RTK's default target)
-rtk init -g --codex                       # Codex — rejects --auto-patch
-rtk init -g --agent hermes --auto-patch   # Hermes
-rtk init -g --agent pi --auto-patch       # Pi
-```
-
-**Antigravity is project-scoped** and is deliberately not wired by `onboard` — it writes
-its rules into the working directory, so a run from `$HOME` would only litter your home
-directory. Run it inside each project you want covered:
-
-```bash
-rtk init --agent antigravity              # note: no -g
-```
-
-Run `rtk init --show` to verify an existing install, or `rtk init --uninstall` to remove
-the hook. Like CodeGraph below, this can't be baked into the image — it writes per-user
-config into `$HOME`, which is a persisted volume that masks image content.
-
-**Interaction with dotfiles:** RTK patches `~/.claude/settings.json` (adds a `PreToolUse`
-hook) and appends `@RTK.md` to `~/.claude/CLAUDE.md`. Both are symlinked by the dotfiles
-step that runs before it, so the edits land in your dotfiles repo and sync across
-machines. RTK merges rather than overwrites and is idempotent, so existing settings
-survive and re-runs don't duplicate entries — but expect uncommitted changes in
-`~/.dotfiles` after your first `onboard`.
 
 ---
 
