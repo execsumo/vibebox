@@ -119,11 +119,26 @@ RUN (curl -fsSL https://herdr.dev/install.sh | sh && \
      chmod +x /usr/local/bin/herdr 2>/dev/null) || echo "Herdr CLI setup skipped"
 
 # 7. Install Hermes Agent via the official installer.
-# Running as root, the installer uses root-mode and lands the binary in /usr/local/bin
-# directly; the cp is a fallback in case it takes the per-user (~/.local/bin) path.
+# Running as root on Linux, the installer picks its FHS layout: the git checkout and
+# its venv go to /usr/local/lib/hermes-agent, the `hermes`/`hermes-acp` launchers to
+# /usr/local/bin, uv-managed Python to /usr/local/share/uv, and only per-user data to
+# $HERMES_HOME (~/.hermes). The cp is a fallback in case it takes the per-user
+# (~/.local/bin) path instead.
+#
+# `hermes update` is a git pull plus a dependency sync *inside that tree*, run as the
+# invoking user with no sudo anywhere in its path — so a root-owned tree leaves the
+# sandbox user unable to update the agent at all ("error: cannot open
+# '.git/FETCH_HEAD': Permission denied", before any network call). Hand the tree to
+# the sandbox user (UID 1000, created further down), exactly as step 7b does for the
+# webui. Chowned inside this RUN so the files are written with their final owner and
+# nothing is duplicated into an extra layer.
 RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && \
      (cp /root/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true) && \
-     chmod +x /usr/local/bin/hermes 2>/dev/null) || echo "Hermes Agent setup skipped or requires manual auth"
+     chmod +x /usr/local/bin/hermes 2>/dev/null; \
+     for d in /usr/local/lib/hermes-agent /usr/local/share/uv; do \
+       [ -d "$d" ] && chown -R 1000:1000 "$d"; \
+     done; \
+     command -v hermes >/dev/null) || echo "Hermes Agent setup skipped or requires manual auth"
 
 # 7b. Install Hermes WebUI (web frontend for the Hermes Agent installed in step 7).
 # Cloned into /opt (image-managed) so a rebuild updates agent + webui together —
@@ -148,20 +163,39 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
 # So let the installer place both itself, via its own env vars: the bundle in /opt
 # (world-readable) rather than the default ~/.codegraph, which as root lands under
 # /root (mode 700) and is unreadable by the sandbox user.
+#
+# Two details make the bundle updatable in place. The launcher on $PATH points at
+# /opt/codegraph/current — the stable link the installer re-points on every upgrade —
+# instead of the versioned directory it links by default, which the installer's own
+# prune step deletes on the next upgrade (leaving a dangling /usr/local/bin/codegraph).
+# And the tree is handed to the sandbox user, since `codegraph upgrade` re-runs this
+# installer against its own install directory as the invoking user. Chowned in this
+# RUN so the bundle is not duplicated into an extra layer.
 RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
        env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
-     chmod -R a+rX /opt/codegraph) || echo "CodeGraph setup skipped"
+     chmod -R a+rX /opt/codegraph && \
+     ln -sfn /opt/codegraph/current/bin/codegraph /usr/local/bin/codegraph && \
+     chown -R 1000:1000 /opt/codegraph) || echo "CodeGraph setup skipped"
 
 # 8b. Verify installs so a build cannot silently succeed with tooling missing.
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
+# The last check asserts the ownership invariant: every tool that updates itself by
+# writing to its own install tree needs that tree owned by the sandbox user, or its
+# updater dies on the first write (this is what broke `hermes update`). Checked here
+# so a change in an upstream installer's layout surfaces at build time.
 RUN set -e; \
     for t in claude codex bun node gh docker; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
     for t in agy herdr hermes codegraph codeburn pi; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! "$t" --version >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \
-    [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"
+    [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"; \
+    for d in /usr/local/lib/hermes-agent /opt/codegraph /opt/hermes-webui; do \
+      if [ -d "$d" ] && [ "$(stat -c %u "$d")" != "1000" ]; then \
+        echo "WARNING: $d is not owned by the sandbox user — its self-update will fail (non-fatal)"; \
+      fi; \
+    done
 
 # Build argument to customize the SSH username (defaults to dev)
 ARG USERNAME=dev
@@ -239,12 +273,17 @@ RUN chmod 755 /usr/local/bin/dotfiles && dotfiles version
 
 # Let the sandbox user drop binaries into /usr/local/bin without sudo — several tool
 # installers do exactly that. Deliberately NOT recursive over all of /usr/local and
-# /opt: chown rewrites the owner of every file it touches, and Docker copies each
-# changed file into a new layer, so recursing over /usr/local/lib/node_modules (every
-# npm global) plus the codegraph bundle and the hermes-webui venv duplicates the whole
-# toolchain in the image for no benefit. Nothing needs it: every write path in
-# `scripts/update` already runs under sudo (which is passwordless here), and
-# /opt/hermes-webui — the one tree updated without sudo — is chowned at its own step.
+# /opt *here*: chown rewrites the owner of every file it touches, and Docker copies
+# each changed file into a new layer, so recursing over /usr/local/lib/node_modules
+# (every npm global) plus the codegraph bundle, the hermes-agent checkout and the
+# hermes-webui venv would duplicate the whole toolchain in the image.
+#
+# The trees that DO need sandbox-user ownership — the ones whose own updater writes
+# to them as the invoking user (/usr/local/lib/hermes-agent, /opt/codegraph,
+# /opt/hermes-webui) — are each chowned inside their own install step, where the
+# files are still in the layer being written and the chown costs nothing.
+# /usr/local/lib/node_modules is not one of them: npm globals are updated through
+# `sudo npm install -g` in `scripts/update`, which needs no ownership change.
 #
 # /opt itself is chowned non-recursively — one inode, no copy-up — so a tool can
 # still create its own directory there without sudo. Existing bundles under it stay

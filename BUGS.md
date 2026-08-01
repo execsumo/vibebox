@@ -9,6 +9,46 @@ none of it has been exercised by a real build or boot. The first `docker compose
 
 ## Fixed Bugs
 
+### `hermes update`: "error: cannot open '.git/FETCH_HEAD': Permission denied"
+
+**Root cause:** the Hermes installer, run as root by the Dockerfile, takes its FHS
+layout on Linux: the git checkout and its venv go to `/usr/local/lib/hermes-agent`,
+the launchers to `/usr/local/bin`, uv-managed Python to `/usr/local/share/uv`, and
+only per-user data to `$HERMES_HOME`. `hermes update` is a `git pull` plus a
+dependency sync **in that tree**, run as the invoking user with no `sudo` anywhere in
+its path — so a root-owned tree left the sandbox user unable to update the agent at
+all. It failed on the first write, before any network call. (The stamp
+`/usr/local/lib/hermes-agent/.install_method` says `git`, so the CLI correctly took
+the git-update path; being inside a container was not the issue.)
+
+**Where it reproduced:** every box, on the first `hermes update`.
+
+**Fix:** the install tree and the uv Python directory are chowned to the sandbox user
+inside the same `RUN` that installs them — same layer, so nothing is duplicated into
+the image. The same treatment is applied to `/opt/codegraph`, which had the identical
+problem (documented in the README as "use `update`, not `codegraph upgrade`"), and its
+launcher on `$PATH` now points at `/opt/codegraph/current` rather than the versioned
+directory the installer's prune step deletes on the next upgrade. Build check 8b
+asserts the ownership invariant so a change in an upstream installer's layout surfaces
+at build time, and `scripts/update` re-takes ownership of any of these trees it finds
+root-owned — so an existing box is repaired by running `update`, not only by a rebuild.
+
+**Also fixed in `scripts/update` while auditing the other pre-installed tools:**
+
+- npm globals were updated with `npm update -g`, which for globals stays inside the
+  semver range a package was installed under and so never crosses a major — Claude
+  Code and Codex both move majors. Now reinstalled explicitly at `@latest`, mirroring
+  the Dockerfile's list, with `--ignore-scripts` preserved for Pi.
+- The Hermes step re-ran the installer as the sandbox user, which takes the *per-user*
+  layout: a second full checkout and venv under `~/.hermes` on the persisted home
+  volume, with `/usr/local/bin/hermes` re-pointed at it and the image copy orphaned.
+  Now `hermes update`, with a reinstall pinned to `HERMES_INSTALL_DIR` as the fallback.
+- Antigravity (`agy`) and `dotfiles` were pre-installed but had no update step at all.
+  Both now have one; the `dotfiles` download is smoke-tested before it is swapped in,
+  so a truncated fetch cannot leave the box without the tool `onboard` depends on.
+- `bun upgrade` was a separate step, but this image installs Bun as an npm global.
+  It is updated with the other npm globals instead.
+
 ### `onboard`: "cannot move '~/.hermes' to '~/.hermes.bak': Permission denied"
 
 **Root cause:** not a permission problem at all. With `SANDBOX_HOME_HOST_PATH` set,

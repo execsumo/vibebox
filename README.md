@@ -308,7 +308,25 @@ The host identity is **not** restored unless you ask for it: by default the sand
 update
 ```
 
-Upgrades all in-container tools (APT packages, npm globals, Bun, Herdr, Hermes, CodeGraph, Hermes WebUI). It creates an `auto-before-update` backup first. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable.
+Upgrades every tool the image pre-installs, each through its own supported update path, and creates an `auto-before-update` backup first:
+
+| Covered | How |
+|---|---|
+| Base packages, `gh`, Docker, Node.js | `apt-get upgrade` (they all come from APT repos; Node stays on its pinned major — bump that with a rebuild and `--build-arg NODE_MAJOR=`) |
+| Claude Code, Codex, Bun, Pi, codeburn, the language servers | reinstalled at `@latest` with `npm install -g`. Not `npm update -g`: for globals that stays inside the semver range a package was installed under, so it never crosses a major — and these CLIs do |
+| Herdr, Antigravity (`agy`) | their official installers, re-run and re-published onto `$PATH` |
+| Hermes Agent | `hermes update` (git pull + dependency sync in `/usr/local/lib/hermes-agent`), falling back to a reinstall over that same tree |
+| CodeGraph | the official installer, pinned to `/opt/codegraph` |
+| Hermes WebUI | `git pull` + `pip install -r requirements.txt` + restart, after the agent (upstream warns against version skew between the two) |
+| `dotfiles` | re-fetched from [dotter](https://github.com/execsumo/dotter), and only swapped in once the download runs |
+
+Not covered: the `tailscale` sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
+
+Every step is tolerated, so one unreachable installer cannot stop the rest of the run. Because that also means a failure scrolls past, `update` ends by running each tool's `--version` and printing `ok` / `MISSING` / `BROKEN` for the whole toolchain.
+
+Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable.
+
+**Why the tools can update themselves.** Each of these updaters writes to its own install tree as the user that invoked it — none of them use `sudo`. So the trees the image manages (`/usr/local/lib/hermes-agent`, `/opt/codegraph`, `/opt/hermes-webui`) are owned by the sandbox user, and `update` re-takes ownership if it finds one root-owned. That means a box built from an older image is repaired by running `update`, without a rebuild.
 
 ### Docker and Tailscale from inside the box
 
@@ -586,9 +604,11 @@ need these by hand.
 > install flow — by upstream design, it neither detects an existing install nor shows
 > status. `codegraph status` is the view you want.
 
-**Upgrading:** use `update`, not `codegraph upgrade`. The bundle lives in `/opt/codegraph`,
-root-owned so every user can read it, which means the self-upgrade path fails with a
-permission error. `update` re-runs the installer under `sudo` with the right paths.
+**Upgrading:** `update` is the path to prefer — it re-runs the installer with the paths
+this image uses. `codegraph upgrade` also works: the bundle in `/opt/codegraph` is owned
+by the sandbox user, and `/usr/local/bin/codegraph` points at `/opt/codegraph/current`,
+the link the installer re-points on every upgrade — so a bundle swap cannot leave the
+command on `$PATH` dangling at a pruned version directory.
 
 ---
 

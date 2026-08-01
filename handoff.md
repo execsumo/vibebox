@@ -66,14 +66,22 @@ RUN (curl -fsSL https://example.com/install.sh | bash && \
 ### apt package
 Add to the existing `apt-get install -y` block (step 1).
 
-> **Ownership note.** Only `/usr/local/bin` is chowned to the sandbox user. The rest of
-> `/usr/local` (notably `lib/node_modules`) and `/opt` stay root-owned — chowning them
-> recursively duplicated the entire toolchain into a fresh image layer for no gain.
-> So an install or update step that writes anywhere other than `/usr/local/bin` must
-> run under `sudo`, which is passwordless here and is what every step in
-> `scripts/update` already does. If a tool must be updated *without* sudo (like
-> hermes-webui, whose `update` step does a plain `git pull`), chown that one directory
-> at its own install step, the way step 7b does.
+> **Ownership rule.** There is no blanket chown: `/usr/local/bin` is chowned to the
+> sandbox user, and the rest of `/usr/local` (notably `lib/node_modules`) and `/opt`
+> stay root-owned. Chowning them recursively in a later step duplicates the entire
+> toolchain into a fresh image layer for no gain.
+>
+> **But if the tool updates itself by writing to its own install tree, chown that tree
+> to `1000:1000` inside the same `RUN` that installs it** — same layer, so the files
+> are written with their final owner and nothing is copied up. These updaters run as
+> the invoking user with no `sudo` anywhere in their path, so a root-owned tree makes
+> the tool permanently un-updatable. That is exactly what broke `hermes update`
+> ("cannot open '.git/FETCH_HEAD': Permission denied"). Three trees are handled this
+> way today: `/usr/local/lib/hermes-agent`, `/opt/codegraph`, `/opt/hermes-webui`.
+> Build check 8b warns if one of them is not user-owned.
+>
+> Everything else — APT, the npm global prefix — is updated under `sudo`, which is
+> passwordless here.
 
 ### Wrapper script on `$PATH`
 When the "tool" is really a shortcut — delegating to a sidecar container, or to a
@@ -122,18 +130,25 @@ example. Also add the step to the README's First-Time Setup list.
 
 ## Update step
 
-The `update` command is `scripts/update` (a normal shell script, `COPY`'d to `/usr/local/bin/update`). It is step-numbered (e.g. `1/9`). When you add a tool:
+The `update` command is `scripts/update` (a normal shell script, `COPY`'d to `/usr/local/bin/update`). Steps are labelled `N/$TOTAL`, so adding one means bumping `TOTAL` at the top and inserting the step before the closing summary echo.
 
-1. Increment the denominator in all step labels (e.g. `6/6` → `7/7`).
-2. Add a new step at the end (before the closing summary echo).
-
-For npm tools, `sudo npm update -g` already covers them — no extra step needed.
-
-For install-script tools, re-run the installer:
+**Prefer the tool's own updater** where it has one, and re-run its installer only as a fallback. `hermes` is the worked example:
 
 ```bash
-echo "N/N Updating ToolName..."
-(curl -fsSL https://example.com/install.sh | bash && (sudo cp ~/.local/bin/toolname /usr/local/bin/toolname 2>/dev/null || true)) || true
+ensure_owned /usr/local/lib/hermes-agent /usr/local/share/uv
+hermes update --yes || { ...re-run the installer pinned to the same tree... }
+```
+
+`ensure_owned` (defined at the top of the script) chowns a tree to the current user if it is not already owned by it. Call it before any self-update path — it is what lets a box built from an older image be repaired by running `update` instead of a rebuild.
+
+For npm tools, add the package to the explicit `npm install -g ...@latest` list, which mirrors the Dockerfile's npm steps. Do **not** use `npm update -g`: for globals it stays inside the semver range the package was installed under, so it never crosses a major.
+
+For install-script tools with no update command, re-run the installer:
+
+```bash
+echo "N/$TOTAL Updating ToolName..."
+(curl -fsSL https://example.com/install.sh | bash && \
+ { [ -x "$HOME/.local/bin/toolname" ] && sudo cp -f "$HOME/.local/bin/toolname" /usr/local/bin/toolname; }) || true
 ```
 
 The same bundle caveat as the install step applies — mirror whatever the Dockerfile does, or
@@ -187,16 +202,17 @@ Pin a tag or SHA there if you want reproducible builds.
 
 | Tool | Install method | Binary location | Update method | Dotfiles |
 |---|---|---|---|---|
-| Claude Code | npm global | `/usr/local/bin/claude` | `npm update -g` | `.claude/settings.json`, `.claude/CLAUDE.md`, `.claude/commands/` |
-| Codex CLI | npm global | `/usr/local/bin/codex` | `npm update -g` | `.codex/` |
-| codeburn | npm global (tolerated) | `/usr/local/bin/codeburn` | `npm update -g` | `.config/codeburn/` |
-| Antigravity (`agy`) | install script | `/usr/local/bin/agy` | re-run installer (no update cmd) | `.gemini/antigravity-cli/` |
-| Herdr | install script | `/usr/local/bin/herdr` | re-run installer | `.config/herdr/` |
-| Pi | npm global (tolerated, `--ignore-scripts`) | `/usr/local/bin/pi` | `npm update -g` | `.pi/` |
-| Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
-| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 9) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
-| CodeGraph | install script (bundle in `/opt/codegraph`) | `/usr/local/bin/codegraph` → symlink into bundle | re-run installer via `update` (not `codegraph upgrade`) | — (per-project `.codegraph/`) |
-| Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
+| Claude Code | npm global | `/usr/local/bin/claude` | `npm install -g @latest` (update step 4) | `.claude/settings.json`, `.claude/CLAUDE.md`, `.claude/commands/` |
+| Codex CLI | npm global | `/usr/local/bin/codex` | `npm install -g @latest` (step 4) | `.codex/` |
+| codeburn | npm global (tolerated) | `/usr/local/bin/codeburn` | `npm install -g @latest` (step 4) | `.config/codeburn/` |
+| Antigravity (`agy`) | install script | `/usr/local/bin/agy` | re-run installer (step 6; no update cmd) | `.gemini/antigravity-cli/` |
+| Herdr | install script | `/usr/local/bin/herdr` | re-run installer (step 5) | `.config/herdr/` |
+| Pi | npm global (tolerated, `--ignore-scripts`) | `/usr/local/bin/pi` | `npm install -g @latest` (step 4) | `.pi/` |
+| Hermes Agent | install script (FHS layout: checkout + venv in `/usr/local/lib/hermes-agent`, **user-owned**) | `/usr/local/bin/hermes` (shim into the venv) | `hermes update` (step 7), installer re-run as fallback | `.hermes/` (data only) |
+| Hermes WebUI | git clone + venv (tolerated, user-owned) | `/opt/hermes-webui` | `git pull` + pip (step 9) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
+| CodeGraph | install script (bundle in `/opt/codegraph`, user-owned) | `/usr/local/bin/codegraph` → symlink to `/opt/codegraph/current` | re-run installer via `update` (step 8); `codegraph upgrade` also works | — (per-project `.codegraph/`) |
+| Bun | npm global | `/usr/local/bin/bun` | `npm install -g bun@latest` (step 4) | — |
+| `dotfiles` (dotter) | `ADD` from GitHub raw | `/usr/local/bin/dotfiles` | re-fetch, smoke-tested (step 10) | — (owns `~/.dotfiles`) |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
 | GitHub CLI | apt (official repo) | `/usr/bin/gh` | apt upgrade | — |
 | Docker | apt (official repo) | `/usr/bin/docker` | apt upgrade | — |
@@ -204,4 +220,4 @@ Pin a tag or SHA there if you want reproducible builds.
 | `tailscale` | wrapper script | `/usr/local/bin/tailscale` | edit `scripts/tailscale` | — |
 | `hermes-webui` | wrapper script | `/usr/local/bin/hermes-webui` | edit `scripts/hermes-webui` | — |
 
-Language servers (pyright, typescript-language-server, etc.) are all npm globals and are covered by `npm update -g`.
+Language servers (pyright, typescript-language-server, etc.) are all npm globals and are covered by update step 4's `npm install -g ...@latest` list. Keep that list and the Dockerfile's npm steps in sync.
