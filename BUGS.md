@@ -123,3 +123,85 @@ still leaves the existing identity alone by default; `--restore-identity` /
 `-RestoreIdentity` adopts the archived one. Archives predating this are detected and
 reported rather than erroring. The in-container `backup` is unchanged — it runs as the
 sandbox user and cannot read the root-owned keys.
+
+### `herdr: command not found`
+
+**Root cause:** the Dockerfile's herdr install ran the official script into
+`~/.local/bin` (root's home, at build time) and then did `cp ... /usr/local/bin/herdr
+2>/dev/null || true` followed by `chmod +x /usr/local/bin/herdr`. If the `cp` silently
+no-op'd, the following `chmod` on a nonexistent file failed, and the whole step was
+tolerated (`|| echo "Herdr CLI setup skipped"`) — leaving the image with no herdr on
+`$PATH` at all. `scripts/update` had the identical pattern and would have re-hit the
+same silent no-op on every future `update` run.
+
+**Where it reproduced:** confirmed live via SSH on the running container —
+`/usr/local/bin/herdr` didn't exist; running the installer by hand dropped a working
+binary in `~/.local/bin` with the installer's own warning that the directory isn't on
+`$PATH`.
+
+**Fix:** install straight to the destination with the herdr installer's own
+`HERDR_INSTALL_DIR` env var (same pattern already used for CodeGraph in this file),
+in both the Dockerfile and `scripts/update`. Verified live: `curl ... | sudo env
+HERDR_INSTALL_DIR=/usr/local/bin sh` lands the binary directly in `/usr/local/bin`.
+
+### `claude`/`codex` installed but failing with "native binary not installed"
+
+**Root cause:** both ship their real CLI as an npm **optional** dependency (a
+platform-native package). npm treats a failed optional-dependency install as
+non-fatal, so `npm install -g` in the Dockerfile (no `|| true` around it, so it never
+failed the build) could exit 0 while silently missing the native package — leaving a
+wrapper script on `$PATH` that throws on every invocation. Build check 8b only ran
+`command -v claude`/`command -v codex`, which passes regardless.
+
+**Where it reproduced:** confirmed live via SSH — `claude --version` and `codex
+--version` both failed outright (not just their self-update paths) with "native binary
+not installed" / "Missing optional dependency ...-linux-x64".
+
+**Fix:** `sudo npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest`
+to force npm to re-resolve the missing optional packages (fixes the running
+container immediately). Build check 8b now runs `"$t" --version` for the daily-driver
+tools, not just `command -v`, so a build that produces a non-functional CLI fails
+loudly instead of shipping.
+
+### `hermes update`: "cannot open '.git/FETCH_HEAD': Permission denied"
+
+**Root cause:** the Hermes Agent installer runs as root at build time and lands its
+real install tree — a git clone — at `/usr/local/lib/hermes-agent` (the `/usr/local/bin/hermes`
+wrapper just execs into it). `hermes update` runs as the sandbox user with no sudo and
+does a plain `git fetch` there, so a root-owned tree fails outright. Exactly the same
+category as the `/opt/hermes-webui` case already fixed in step 7b — this install just
+never got the matching chown.
+
+**Where it reproduced:** confirmed live via SSH — `hermes update` failed with `error:
+cannot open '.git/FETCH_HEAD': Permission denied`; `/usr/local/lib/hermes-agent` was
+`root:root`.
+
+**Fix:** Dockerfile step 7 now chowns `/usr/local/lib/hermes-agent` to `1000:1000`
+right after install, mirroring step 7b. Confirmed live: `sudo chown -R dev:dev
+/usr/local/lib/hermes-agent` then `hermes update` completed successfully.
+
+### `update` silently ran a personal macOS dotfiles function instead of the real script
+
+**Root cause:** the sandbox user's `~/.zshrc`, synced in by the `dotfiles` tool from a
+personal (cross-platform) dotfiles repo, defined its own `update` shell function —
+a generic "update everything" helper written for a laptop (`brew`, `softwareupdate`,
+plain `npm update -g`, `claude update`, ...). zsh resolves a function before `$PATH`,
+so typing `update` never reached `/usr/local/bin/update` (which correctly runs
+`sudo npm update -g` etc.); it ran the personal function instead, which called `npm
+update -g` **without** sudo — producing the `EACCES` errors on `/usr/lib/node_modules`.
+Not a permissions bug: opening up ownership of the npm global directory would have
+papered over the symptom while leaving the real cause (a name collision) in place.
+
+**Where it reproduced:** confirmed live — `zsh -i -c 'type update'` resolved to `a
+shell function from /home/dev/.zshrc`, not `/usr/local/bin/update`.
+
+**Fix, two layers:** the immediate fix on the affected box was `dotfiles rm ~/.zshrc`
+(unlinking it from the shared dotfiles repo, since a laptop-oriented `update` helper
+doesn't belong in the sandbox) followed by deleting the conflicting function from the
+now-local file. As a durable, image-level backstop for any dotfiles repo that defines
+`update` again in the future, `/etc/zsh/zlogin` (sourced after `~/.zshrc` for every
+login shell — confirmed live by sourcing order) now clears any `update`
+function/alias before the prompt appears, so `command` resolution always falls
+through to `/usr/local/bin/update`. This only covers login shells (plain `ssh
+vibebox`); a non-login shell started inside another multiplexer would still see a
+personal definition if one exists.

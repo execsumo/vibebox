@@ -19,7 +19,10 @@ echo "5/9 Updating Bun..."
 sudo bun upgrade || true
 echo ""
 echo "6/9 Updating Herdr..."
-(curl -fsSL https://herdr.dev/install.sh | sh && (sudo cp ~/.local/bin/herdr /usr/local/bin/herdr 2>/dev/null || true)) || true
+# Installs straight to /usr/local/bin via HERDR_INSTALL_DIR (matches the Dockerfile) —
+# the old install-to-~/.local/bin-then-cp dance could silently no-op the cp and leave
+# the running binary un-updated with no error.
+(curl -fsSL https://herdr.dev/install.sh | sudo env HERDR_INSTALL_DIR=/usr/local/bin sh) || true
 echo ""
 echo "7/9 Updating Hermes Agent..."
 (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && (sudo cp ~/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true)) || true
