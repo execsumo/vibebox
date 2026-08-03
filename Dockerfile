@@ -46,6 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fzf \
     jq \
     zsh \
+    bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 # 1b. Disable the zsh-newuser-install first-run wizard. An interactive zsh that
