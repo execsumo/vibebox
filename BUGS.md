@@ -9,6 +9,57 @@ none of it has been exercised by a real build or boot. The first `docker compose
 
 ## Fixed Bugs
 
+### Claude Code: "Auto-update failed: no write permission to npm prefix · Run claude doctor"
+
+**Root cause:** npm's global prefix in this image is `/usr`, not `/usr/local` — the
+NodeSource `nodejs` deb sets it that way — so every npm global installs into root-owned
+`/usr/lib/node_modules` (`/usr/bin/claude` is just a symlink into it). Confirmed live:
+`npm config get prefix` → `/usr`, `/usr/lib/node_modules/@anthropic-ai/claude-code`
+owned `root:root`. Claude Code's in-process updater probes that prefix for write access
+at startup and reports the failure on every launch. Nothing was actually broken: the
+CLI ran fine (2.1.220 against 2.1.221 published), npm globals are deliberately
+root-owned here, and `update` refreshes them under passwordless `sudo`. Worth noting
+the Dockerfile's chown comment claimed the globals lived under `/usr/local/lib/node_modules`
+— they never did, so no chown scope change would have silenced this.
+
+**Where it reproduced:** every `claude` launch inside the box, for any user, since the
+image has existed.
+
+**Fix:** `ENV DISABLE_AUTOUPDATER=1` in the Dockerfile (reaches `docker exec` directly
+and SSH sessions via the entrypoint's `~/.ssh/environment` forwarding), so the CLI stops
+attempting an update path this image does not use. Since that makes `update` the only
+update path, `scripts/update` now installs `@anthropic-ai/claude-code@latest` and
+`@openai/codex@latest` explicitly instead of relying on `npm update -g`, which honours
+the caret range npm records per global and so never crosses a major version. It also
+echoes both versions afterwards. The stale `/usr/local/lib/node_modules` comment was
+corrected in place.
+
+### `codegraph` would break on its first upgrade (dangling launcher symlink)
+
+**Root cause:** the installer writes its bundle to `/opt/codegraph/versions/vX.Y.Z/`,
+maintains a `current` symlink beside it, and points `/usr/local/bin/codegraph` at the
+**versioned** path. Confirmed in the running box: `/usr/local/bin/codegraph ->
+/opt/codegraph/versions/v1.5.0/bin/codegraph`, with `current -> versions/v1.5.0` sitting
+right there unused. An upgrade writes a new version directory and prunes the old one, so
+the launcher would name a path that no longer exists. Latent to date only because
+CodeGraph has never actually been upgraded in this image.
+
+**Fix:** both the Dockerfile step and `update` re-point the launcher at
+`/opt/codegraph/current/bin/codegraph` after the installer runs. Fully resolving that
+link still lands inside the real versioned bundle, so the launcher's
+resolve-bundle-relative-to-myself behaviour is unaffected.
+
+### `bun upgrade` was the wrong update path for how Bun is installed
+
+**Root cause:** `update` ran `sudo bun upgrade`, which is Bun's self-updater for a
+standalone `~/.bun` install. This image does not install Bun that way — it is an npm
+global (`npm ls -g` shows `bun@1.3.14`; `/usr/bin/bun` is a symlink into
+`/usr/lib/node_modules/bun/`). Self-upgrading replaces the binary underneath npm and
+leaves npm's recorded version lying, after which the two disagree about what is installed.
+
+**Fix:** Bun moved into the npm globals list in `update` and the standalone step dropped,
+so it updates on the same path it was installed by.
+
 ### `onboard`: "cannot move '~/.hermes' to '~/.hermes.bak': Permission denied"
 
 **Root cause:** not a permission problem at all. With `SANDBOX_HOME_HOST_PATH` set,
@@ -123,3 +174,85 @@ still leaves the existing identity alone by default; `--restore-identity` /
 `-RestoreIdentity` adopts the archived one. Archives predating this are detected and
 reported rather than erroring. The in-container `backup` is unchanged — it runs as the
 sandbox user and cannot read the root-owned keys.
+
+### `herdr: command not found`
+
+**Root cause:** the Dockerfile's herdr install ran the official script into
+`~/.local/bin` (root's home, at build time) and then did `cp ... /usr/local/bin/herdr
+2>/dev/null || true` followed by `chmod +x /usr/local/bin/herdr`. If the `cp` silently
+no-op'd, the following `chmod` on a nonexistent file failed, and the whole step was
+tolerated (`|| echo "Herdr CLI setup skipped"`) — leaving the image with no herdr on
+`$PATH` at all. `scripts/update` had the identical pattern and would have re-hit the
+same silent no-op on every future `update` run.
+
+**Where it reproduced:** confirmed live via SSH on the running container —
+`/usr/local/bin/herdr` didn't exist; running the installer by hand dropped a working
+binary in `~/.local/bin` with the installer's own warning that the directory isn't on
+`$PATH`.
+
+**Fix:** install straight to the destination with the herdr installer's own
+`HERDR_INSTALL_DIR` env var (same pattern already used for CodeGraph in this file),
+in both the Dockerfile and `scripts/update`. Verified live: `curl ... | sudo env
+HERDR_INSTALL_DIR=/usr/local/bin sh` lands the binary directly in `/usr/local/bin`.
+
+### `claude`/`codex` installed but failing with "native binary not installed"
+
+**Root cause:** both ship their real CLI as an npm **optional** dependency (a
+platform-native package). npm treats a failed optional-dependency install as
+non-fatal, so `npm install -g` in the Dockerfile (no `|| true` around it, so it never
+failed the build) could exit 0 while silently missing the native package — leaving a
+wrapper script on `$PATH` that throws on every invocation. Build check 8b only ran
+`command -v claude`/`command -v codex`, which passes regardless.
+
+**Where it reproduced:** confirmed live via SSH — `claude --version` and `codex
+--version` both failed outright (not just their self-update paths) with "native binary
+not installed" / "Missing optional dependency ...-linux-x64".
+
+**Fix:** `sudo npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest`
+to force npm to re-resolve the missing optional packages (fixes the running
+container immediately). Build check 8b now runs `"$t" --version` for the daily-driver
+tools, not just `command -v`, so a build that produces a non-functional CLI fails
+loudly instead of shipping.
+
+### `hermes update`: "cannot open '.git/FETCH_HEAD': Permission denied"
+
+**Root cause:** the Hermes Agent installer runs as root at build time and lands its
+real install tree — a git clone — at `/usr/local/lib/hermes-agent` (the `/usr/local/bin/hermes`
+wrapper just execs into it). `hermes update` runs as the sandbox user with no sudo and
+does a plain `git fetch` there, so a root-owned tree fails outright. Exactly the same
+category as the `/opt/hermes-webui` case already fixed in step 7b — this install just
+never got the matching chown.
+
+**Where it reproduced:** confirmed live via SSH — `hermes update` failed with `error:
+cannot open '.git/FETCH_HEAD': Permission denied`; `/usr/local/lib/hermes-agent` was
+`root:root`.
+
+**Fix:** Dockerfile step 7 now chowns `/usr/local/lib/hermes-agent` to `1000:1000`
+right after install, mirroring step 7b. Confirmed live: `sudo chown -R dev:dev
+/usr/local/lib/hermes-agent` then `hermes update` completed successfully.
+
+### `update` silently ran a personal macOS dotfiles function instead of the real script
+
+**Root cause:** the sandbox user's `~/.zshrc`, synced in by the `dotfiles` tool from a
+personal (cross-platform) dotfiles repo, defined its own `update` shell function —
+a generic "update everything" helper written for a laptop (`brew`, `softwareupdate`,
+plain `npm update -g`, `claude update`, ...). zsh resolves a function before `$PATH`,
+so typing `update` never reached `/usr/local/bin/update` (which correctly runs
+`sudo npm update -g` etc.); it ran the personal function instead, which called `npm
+update -g` **without** sudo — producing the `EACCES` errors on `/usr/lib/node_modules`.
+Not a permissions bug: opening up ownership of the npm global directory would have
+papered over the symptom while leaving the real cause (a name collision) in place.
+
+**Where it reproduced:** confirmed live — `zsh -i -c 'type update'` resolved to `a
+shell function from /home/dev/.zshrc`, not `/usr/local/bin/update`.
+
+**Fix, two layers:** the immediate fix on the affected box was `dotfiles rm ~/.zshrc`
+(unlinking it from the shared dotfiles repo, since a laptop-oriented `update` helper
+doesn't belong in the sandbox) followed by deleting the conflicting function from the
+now-local file. As a durable, image-level backstop for any dotfiles repo that defines
+`update` again in the future, `/etc/zsh/zlogin` (sourced after `~/.zshrc` for every
+login shell — confirmed live by sourcing order) now clears any `update`
+function/alias before the prompt appears, so `command` resolution always falls
+through to `/usr/local/bin/update`. This only covers login shells (plain `ssh
+vibebox`); a non-login shell started inside another multiplexer would still see a
+personal definition if one exists.
