@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    golang-go \
     ca-certificates \
     iputils-ping \
     unzip \
@@ -46,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fzf \
     jq \
     zsh \
+    bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 # 1b. Disable the zsh-newuser-install first-run wizard. An interactive zsh that
@@ -184,7 +186,7 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
 # and leave the wrapper script in place while the tool itself throws "native binary
 # not installed" on every invocation. `command -v` alone would miss that entirely.
 RUN set -e; \
-    for t in claude codex bun node gh docker; do \
+    for t in claude codex bun node go gh docker; do \
       command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; \
       "$t" --version >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
     done; \
