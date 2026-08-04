@@ -38,6 +38,7 @@ Details on each step below.
 | Node.js + npm | LTS (v22 by default) |
 | Bun | Fast JS runtime / package manager |
 | Python | System Python 3 |
+| Go | System Go toolchain |
 | Git + GitHub CLI | `git` and `gh` |
 | Docker | Container runtime & CLI (`docker` and `docker compose`) |
 | tmux | Terminal multiplexer |
@@ -57,7 +58,7 @@ Details on each step below.
 | `bash-language-server` | Shell scripts |
 | `tailwindcss-language-server` | Tailwind CSS |
 
-Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — install them inside the sandbox when you need them.
+Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — install them inside the sandbox when you need them. The Go toolchain itself is pre-installed.
 
 ### Infrastructure
 

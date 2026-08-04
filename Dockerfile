@@ -38,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    golang-go \
     ca-certificates \
     iputils-ping \
     unzip \
@@ -157,7 +158,7 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 RUN set -e; \
-    for t in claude codex bun node gh docker; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
+    for t in claude codex bun node go gh docker; do command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; done; \
     for t in agy herdr hermes codegraph codeburn pi; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! "$t" --version >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
