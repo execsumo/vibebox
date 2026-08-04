@@ -113,6 +113,18 @@ RUN npm install -g \
     @tailwindcss/language-server@${TAILWIND_LANGUAGE_SERVER_VERSION} \
     && npm cache clean --force
 
+# 4a. Turn off Claude Code's in-process auto-updater.
+# NodeSource's nodejs deb ships npm with prefix=/usr, so every global above lands in
+# root-owned /usr/lib/node_modules (NOT /usr/local — the chown near the end of this
+# file does not reach them, by design). Claude Code checks that prefix for write access
+# on startup and, finding none, prints "Auto-update failed: no write permission to npm
+# prefix - Run claude doctor" on every launch. Nothing is broken: npm globals are
+# deliberately root-owned here and `update` refreshes them under sudo. This just stops
+# the CLI from attempting — and loudly failing — an update path this image does not use.
+# Docker ENV reaches `docker exec` sessions directly and SSH sessions via the
+# entrypoint's ~/.ssh/environment forwarding.
+ENV DISABLE_AUTOUPDATER=1
+
 # 4b. Install codeburn (AI spend tracker) as a tolerated npm global.
 # Kept out of the step-4 block so a publish/registry hiccup on this optional tool
 # cannot fail a build that already produced the whole core toolchain.
@@ -144,10 +156,14 @@ RUN (curl -fsSL https://herdr.dev/install.sh | env HERDR_INSTALL_DIR=/usr/local/
 # it fails with "cannot open '.git/FETCH_HEAD': Permission denied". Hardcoded 1000:1000
 # rather than $USERNAME: the sandbox user (created later in the file) is fixed at UID
 # 1000, same reasoning step 7b already uses for the webui chown.
+# /usr/local/share/uv gets the same chown: `hermes update` re-syncs dependencies through
+# uv, which writes its cache and managed toolchains there, and the installer leaves it
+# root-owned too.
 RUN (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && \
      (cp /root/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true) && \
      chmod +x /usr/local/bin/hermes 2>/dev/null && \
-     (chown -R 1000:1000 /usr/local/lib/hermes-agent 2>/dev/null || true)) \
+     (chown -R 1000:1000 /usr/local/lib/hermes-agent 2>/dev/null || true) && \
+     (chown -R 1000:1000 /usr/local/share/uv 2>/dev/null || true)) \
      || echo "Hermes Agent setup skipped or requires manual auth"
 
 # 7b. Install Hermes WebUI (web frontend for the Hermes Agent installed in step 7).
@@ -173,9 +189,17 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
 # So let the installer place both itself, via its own env vars: the bundle in /opt
 # (world-readable) rather than the default ~/.codegraph, which as root lands under
 # /root (mode 700) and is unreadable by the sandbox user.
+# The installer points /usr/local/bin/codegraph at the *versioned* bundle it just wrote
+# (/opt/codegraph/versions/vX.Y.Z/...). It also maintains a `current` link beside it, and
+# an upgrade prunes the old version directory — so the launcher symlink is re-pointed at
+# `current` here, or the first upgrade would leave it dangling. Resolving `current` still
+# ends up inside the real bundle, so the launcher's relative bundle lookup is unaffected.
 RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
        env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
-     chmod -R a+rX /opt/codegraph) || echo "CodeGraph setup skipped"
+     chmod -R a+rX /opt/codegraph && \
+     { [ -e /opt/codegraph/current/bin/codegraph ] && \
+       ln -sfn /opt/codegraph/current/bin/codegraph /usr/local/bin/codegraph; }) \
+     || echo "CodeGraph setup skipped"
 
 # 8b. Verify installs so a build cannot silently succeed with tooling missing.
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
@@ -273,8 +297,9 @@ RUN chmod 755 /usr/local/bin/dotfiles && dotfiles version
 # Let the sandbox user drop binaries into /usr/local/bin without sudo — several tool
 # installers do exactly that. Deliberately NOT recursive over all of /usr/local and
 # /opt: chown rewrites the owner of every file it touches, and Docker copies each
-# changed file into a new layer, so recursing over /usr/local/lib/node_modules (every
-# npm global) plus the codegraph bundle and the hermes-webui venv duplicates the whole
+# changed file into a new layer, so recursing over /usr/lib/node_modules (every npm
+# global — npm's prefix here is /usr, set by the NodeSource deb, not /usr/local)
+# plus the codegraph bundle and the hermes-webui venv duplicates the whole
 # toolchain in the image for no benefit. Nothing needs it: every write path in
 # `scripts/update` already runs under sudo (which is passwordless here), and
 # /opt/hermes-webui — the one tree updated without sudo — is chowned at its own step.

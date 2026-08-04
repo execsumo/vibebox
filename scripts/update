@@ -1,48 +1,174 @@
 #!/bin/bash
+# Update every tool this image pre-installs, using each tool's own supported update
+# path. Runs as the sandbox user; `sudo` is passwordless here and is used only where
+# the target is genuinely root-owned (APT, the npm global prefix, /opt bundles).
 echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
-echo "1/9 Creating automatic safety backup..."
+
+TOTAL=10
+
+# A few image-managed trees are owned by the sandbox user (see the Dockerfile), because
+# the tools that live in them update themselves by writing to their own install tree as
+# the invoking user — no sudo anywhere in their update paths. A root-owned tree makes
+# such a tool permanently un-updatable: `hermes update` failed at its first step with
+# "cannot open '.git/FETCH_HEAD': Permission denied".
+#
+# Re-take ownership here as well as at build time, so a box built from an older image is
+# repaired by running `update` instead of requiring a rebuild. The -O test only looks at
+# the top of the tree; that is the state the old images left behind, and the chown is
+# recursive. This is deliberately NOT applied to /opt/codegraph or the npm global prefix
+# — those stay root-owned and are updated under sudo below.
+ensure_owned() {
+  local path
+  for path in "$@"; do
+    [ -e "$path" ] || continue
+    [ -O "$path" ] && continue
+    echo "    Taking ownership of $path (image predates it being user-owned)..."
+    sudo chown -R "$(id -u):$(id -g)" "$path" || true
+  done
+}
+
+echo "1/$TOTAL Creating automatic safety backup..."
 backup "auto-before-update"
 echo ""
-echo "2/9 Updating system packages (APT)..."
+echo "2/$TOTAL Updating system packages (APT)..."
+# Covers the base packages plus everything installed from a vendor APT repo: gh, docker
+# (engine, CLI, buildx, compose) and the NodeSource nodejs — which stays on its pinned
+# major; a major bump is a rebuild with --build-arg NODE_MAJOR=.
 sudo apt-get update && sudo apt-get upgrade -y
 echo ""
-echo "3/9 Cleaning up old, unnecessary files..."
+echo "3/$TOTAL Cleaning up old, unnecessary files..."
 # Autoremove orphaned packages and clear APT package download caches to save container space
 sudo apt-get autoremove -y && sudo apt-get clean
 echo ""
-echo "4/9 Updating global NPM CLIs (Claude Code, Codex, Pi, codeburn, language servers)..."
-sudo npm update -g
+echo "4/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, language servers)..."
+# Reinstall at @latest rather than `npm update -g`: for globals npm stays within the
+# semver range the package was installed under, so it never crosses a major — and these
+# CLIs (Claude Code especially) move majors. This is also the *only* update path for
+# Claude Code and Codex, since npm's prefix here is /usr and root-owned, so the image
+# disables their in-process auto-updaters (see DISABLE_AUTOUPDATER in the Dockerfile).
+#
+# Bun is in this list because that is how the image installs it — an npm global, not a
+# standalone ~/.bun install. `bun upgrade` would replace the binary underneath npm and
+# leave npm's recorded version lying; keeping bun on the same path it was installed by
+# is the one source of truth. The list mirrors the Dockerfile's npm steps: keep in sync.
+sudo npm install -g --no-fund --no-audit \
+  @anthropic-ai/claude-code@latest \
+  @openai/codex@latest \
+  bun@latest \
+  pyright@latest \
+  typescript@latest \
+  typescript-language-server@latest \
+  vscode-langservers-extracted@latest \
+  yaml-language-server@latest \
+  bash-language-server@latest \
+  @tailwindcss/language-server@latest
+# The two tolerated globals, updated separately for the same reason the Dockerfile
+# installs them separately: a registry hiccup on an optional tool must not take the core
+# toolchain's update down with it. --ignore-scripts on Pi, per upstream.
+sudo npm install -g --no-fund --no-audit codeburn@latest || echo "    codeburn update skipped"
+sudo npm install -g --no-fund --no-audit --ignore-scripts @earendil-works/pi-coding-agent@latest \
+  || echo "    Pi update skipped"
 echo ""
-echo "5/9 Updating Bun..."
-sudo bun upgrade || true
-echo ""
-echo "6/9 Updating Herdr..."
+echo "5/$TOTAL Updating Herdr..."
 # Installs straight to /usr/local/bin via HERDR_INSTALL_DIR (matches the Dockerfile) —
 # the old install-to-~/.local/bin-then-cp dance could silently no-op the cp and leave
 # the running binary un-updated with no error.
 (curl -fsSL https://herdr.dev/install.sh | sudo env HERDR_INSTALL_DIR=/usr/local/bin sh) || true
 echo ""
-echo "7/9 Updating Hermes Agent..."
-(curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && (sudo cp ~/.local/bin/hermes /usr/local/bin/hermes 2>/dev/null || true)) || true
+echo "6/$TOTAL Updating Antigravity CLI (agy)..."
+# No install-dir env var upstream, so it takes its per-user path and the binary is
+# published onto the shared PATH the way the Dockerfile does. The -x guard keeps a
+# failed download from copying nothing over a working binary.
+(curl -fsSL https://antigravity.google/cli/install.sh | bash && \
+ { [ -x "$HOME/.local/bin/agy" ] && sudo cp -f "$HOME/.local/bin/agy" /usr/local/bin/agy; }) || true
 echo ""
-echo "8/9 Updating CodeGraph..."
-# Must mirror the Dockerfile: the launcher resolves its bundle relative to itself, so
-# it stays a symlink into /opt/codegraph rather than being copied into /usr/local/bin.
+echo "7/$TOTAL Updating Hermes Agent..."
+# Use the agent's own updater: a git pull + dependency sync inside
+# /usr/local/lib/hermes-agent (the FHS layout its installer picks for a root install),
+# run as the invoking user — hence the ownership guard. uv's shared cache/toolchain dir
+# is written during that sync, so it needs the same treatment.
+ensure_owned /usr/local/lib/hermes-agent /usr/local/share/uv
+if command -v hermes >/dev/null 2>&1; then
+  hermes update --yes || {
+    echo "    'hermes update' failed — falling back to a reinstall over the same tree."
+    # HERMES_INSTALL_DIR pins the installer to the tree /usr/local/bin/hermes already
+    # points at, so the launcher stays valid instead of a second copy appearing under
+    # ~/.hermes. Root-run, so hand the tree back afterwards.
+    (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | \
+       sudo env HERMES_INSTALL_DIR=/usr/local/lib/hermes-agent bash && \
+     sudo chown -R "$(id -u):$(id -g)" /usr/local/lib/hermes-agent /usr/local/share/uv) || true
+  }
+else
+  echo "    hermes is not installed; skipping."
+fi
+echo ""
+echo "8/$TOTAL Updating CodeGraph..."
+# Must mirror the Dockerfile: the launcher resolves its bundle relative to its own
+# symlink-resolved path, so /usr/local/bin/codegraph stays a symlink into /opt/codegraph
+# rather than being copied. Point it at the installer's `current` link instead of the
+# versioned directory it writes by default — otherwise the next upgrade prunes the
+# version the launcher names and leaves a dangling symlink. Resolving `current` still
+# lands inside the real bundle, so the launcher's relative lookup is unaffected.
 (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
    sudo env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
- sudo chmod -R a+rX /opt/codegraph) || true
+ sudo chmod -R a+rX /opt/codegraph && \
+ { [ -e /opt/codegraph/current/bin/codegraph ] && \
+   ln -sfn /opt/codegraph/current/bin/codegraph /usr/local/bin/codegraph; }) || true
 echo "    Re-run 'codegraph install' if you added or removed agent CLIs."
 echo ""
-echo "9/9 Updating Hermes WebUI..."
+echo "9/$TOTAL Updating Hermes WebUI..."
+# After the agent, deliberately: upstream warns against version skew between the two.
+ensure_owned /opt/hermes-webui
 (git -C /opt/hermes-webui pull --ff-only && \
  /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
  /opt/hermes-webui/ctl.sh restart) || true
+echo ""
+echo "10/$TOTAL Updating the dotfiles tool..."
+# A single self-contained script, installed in the image by Docker's ADD from this same
+# URL. Downloaded to a temp file and smoke-tested before being swapped in, so a truncated
+# or unavailable download cannot leave the box without a working `dotfiles` — the tool
+# `onboard` depends on.
+DOTTER_REPO="${DOTTER_REPO:-execsumo/dotter}"
+DOTTER_REF="${DOTTER_REF:-main}"
+DOTFILES_TMP="$(mktemp)"
+if curl -fsSL "https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles" \
+     -o "$DOTFILES_TMP" \
+   && chmod 755 "$DOTFILES_TMP" \
+   && "$DOTFILES_TMP" version >/dev/null 2>&1; then
+  sudo cp -f "$DOTFILES_TMP" /usr/local/bin/dotfiles && sudo chmod 755 /usr/local/bin/dotfiles
+else
+  echo "    dotfiles update skipped"
+fi
+rm -f "$DOTFILES_TMP"
+echo ""
+# Every step above is tolerated (`|| true`) so one unreachable installer cannot stop the
+# rest of the update — which also means a failure scrolls past. Close with the same check
+# the Dockerfile's step 8b runs, so the state of the toolchain after an update is stated
+# rather than assumed. `--version` rather than `command -v`: a half-updated launcher
+# still exists and is still executable.
+echo "Verifying the toolchain..."
+for t in claude codex bun node npm gh docker hermes herdr agy codegraph codeburn pi dotfiles; do
+  if ! command -v "$t" >/dev/null 2>&1; then
+    printf '  %-12s MISSING\n' "$t"
+  elif ! "$t" --version >/dev/null 2>&1; then
+    printf '  %-12s BROKEN (installed, but fails to run)\n' "$t"
+  else
+    printf '  %-12s ok\n' "$t"
+  fi
+done
+if [ -x /opt/hermes-webui/ctl.sh ]; then
+  printf '  %-12s ok\n' "hermes-webui"
+else
+  printf '  %-12s MISSING\n' "hermes-webui"
+fi
 echo ""
 echo "=============================================="
 echo "System packages updated and container pruned successfully."
 echo "Saved safety backup with label: auto-before-update"
 echo "Note: tool updates land in image-managed paths and reset on 'docker compose down/up'."
 echo "      Rebuild the image (docker compose up -d --build) to make them durable."
+echo "      The tailscale sidecars are separate containers — update them from the"
+echo "      host with 'docker compose pull && docker compose up -d'."
 echo "=============================================="

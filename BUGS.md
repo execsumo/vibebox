@@ -9,6 +9,57 @@ none of it has been exercised by a real build or boot. The first `docker compose
 
 ## Fixed Bugs
 
+### Claude Code: "Auto-update failed: no write permission to npm prefix · Run claude doctor"
+
+**Root cause:** npm's global prefix in this image is `/usr`, not `/usr/local` — the
+NodeSource `nodejs` deb sets it that way — so every npm global installs into root-owned
+`/usr/lib/node_modules` (`/usr/bin/claude` is just a symlink into it). Confirmed live:
+`npm config get prefix` → `/usr`, `/usr/lib/node_modules/@anthropic-ai/claude-code`
+owned `root:root`. Claude Code's in-process updater probes that prefix for write access
+at startup and reports the failure on every launch. Nothing was actually broken: the
+CLI ran fine (2.1.220 against 2.1.221 published), npm globals are deliberately
+root-owned here, and `update` refreshes them under passwordless `sudo`. Worth noting
+the Dockerfile's chown comment claimed the globals lived under `/usr/local/lib/node_modules`
+— they never did, so no chown scope change would have silenced this.
+
+**Where it reproduced:** every `claude` launch inside the box, for any user, since the
+image has existed.
+
+**Fix:** `ENV DISABLE_AUTOUPDATER=1` in the Dockerfile (reaches `docker exec` directly
+and SSH sessions via the entrypoint's `~/.ssh/environment` forwarding), so the CLI stops
+attempting an update path this image does not use. Since that makes `update` the only
+update path, `scripts/update` now installs `@anthropic-ai/claude-code@latest` and
+`@openai/codex@latest` explicitly instead of relying on `npm update -g`, which honours
+the caret range npm records per global and so never crosses a major version. It also
+echoes both versions afterwards. The stale `/usr/local/lib/node_modules` comment was
+corrected in place.
+
+### `codegraph` would break on its first upgrade (dangling launcher symlink)
+
+**Root cause:** the installer writes its bundle to `/opt/codegraph/versions/vX.Y.Z/`,
+maintains a `current` symlink beside it, and points `/usr/local/bin/codegraph` at the
+**versioned** path. Confirmed in the running box: `/usr/local/bin/codegraph ->
+/opt/codegraph/versions/v1.5.0/bin/codegraph`, with `current -> versions/v1.5.0` sitting
+right there unused. An upgrade writes a new version directory and prunes the old one, so
+the launcher would name a path that no longer exists. Latent to date only because
+CodeGraph has never actually been upgraded in this image.
+
+**Fix:** both the Dockerfile step and `update` re-point the launcher at
+`/opt/codegraph/current/bin/codegraph` after the installer runs. Fully resolving that
+link still lands inside the real versioned bundle, so the launcher's
+resolve-bundle-relative-to-myself behaviour is unaffected.
+
+### `bun upgrade` was the wrong update path for how Bun is installed
+
+**Root cause:** `update` ran `sudo bun upgrade`, which is Bun's self-updater for a
+standalone `~/.bun` install. This image does not install Bun that way — it is an npm
+global (`npm ls -g` shows `bun@1.3.14`; `/usr/bin/bun` is a symlink into
+`/usr/lib/node_modules/bun/`). Self-upgrading replaces the binary underneath npm and
+leaves npm's recorded version lying, after which the two disagree about what is installed.
+
+**Fix:** Bun moved into the npm globals list in `update` and the standalone step dropped,
+so it updates on the same path it was installed by.
+
 ### `onboard`: "cannot move '~/.hermes' to '~/.hermes.bak': Permission denied"
 
 **Root cause:** not a permission problem at all. With `SANDBOX_HOME_HOST_PATH` set,

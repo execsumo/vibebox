@@ -309,7 +309,22 @@ The host identity is **not** restored unless you ask for it: by default the sand
 update
 ```
 
-Upgrades all in-container tools (APT packages, npm globals, Bun, Herdr, Hermes, CodeGraph, Hermes WebUI). It creates an `auto-before-update` backup first. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable.
+Upgrades every tool the image pre-installs — APT packages, all npm globals (including Bun, which is installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, CodeGraph, the Hermes WebUI, and the `dotfiles` tool — each through its own supported update path. It creates an `auto-before-update` backup first and prints an `ok` / `MISSING` / `BROKEN` line per tool at the end, so a step that failed and scrolled past is still visible. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable. The tailscale sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
+
+**Claude Code and Codex do not self-update here — `update` is their update path.** The
+NodeSource `nodejs` package sets npm's prefix to `/usr`, so every npm global lives in
+root-owned `/usr/lib/node_modules`. That is intentional (see the chown note in the
+Dockerfile), but Claude Code's built-in updater checks the prefix for write access at
+startup and otherwise prints `Auto-update failed: no write permission to npm prefix ·
+Run claude doctor` on every launch. The image therefore sets `DISABLE_AUTOUPDATER=1`
+so the CLI stops attempting an update path this box does not use, and `update` reinstalls
+every npm global at `@latest` under `sudo` (a bare `npm update -g` honours the caret range
+npm records per global, so it would never cross a major version). To update just Claude
+without a full `update` run:
+
+```bash
+sudo npm install -g @anthropic-ai/claude-code@latest
+```
 
 ### Docker and Tailscale from inside the box
 
