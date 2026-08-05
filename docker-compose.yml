@@ -89,6 +89,12 @@ services:
     # this stack talks to the host's docker daemon over the bind-mounted socket
     # below instead. Adding it back grants the sandbox host-level capabilities it
     # does not need.
+    # SYS_ADMIN is added below instead, scoped to one purpose: Codex CLI's bubblewrap
+    # sandbox needs CLONE_NEWUSER to build its user namespace, which Docker's default
+    # seccomp profile denies to unprivileged processes. Without it, `bwrap`/`unshare -U`
+    # fail with EPERM even once the package is installed.
+    cap_add:
+      - SYS_ADMIN
     # Share the network namespace of the tailscale container
     network_mode: service:tailscale
     depends_on:
