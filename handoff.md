@@ -35,6 +35,27 @@ RUN npm install -g \
 ```
 
 ### Official install script
+
+> **The one rule: a tool lives in `/usr/local/bin`, never in `$HOME`.**
+> `$HOME` is a persisted volume and `~/.local/bin` precedes `/usr/local/bin` on `$PATH`,
+> so a binary left there outlives every rebuild and silently shadows the copy `update`
+> maintains — the two then drift with nothing to say so. This is not a style preference;
+> it is the failure that put two full Hermes installs on the same box, one of them
+> updated by `update` and the other actually running.
+>
+> Follow it in whichever way the installer allows:
+>
+> | Installer | Approach |
+> |---|---|
+> | takes a destination env var | point it at `/usr/local/bin` (herdr, hermes) |
+> | hardcodes `~/.local/bin` | run it against a throwaway `HOME`, publish the result (agy) |
+>
+> The Dockerfile gets this for free — it runs as root, whose `$HOME` is ephemeral.
+> `scripts/update` runs as the sandbox user against the real home, so it uses
+> `publish_from_installer`, which hands the installer a `mktemp -d` as `$HOME` and
+> `install`s only the finished binary. Prevention over detection: there is no leftover
+> state to go stale, so nothing needs to check for one.
+
 Add a numbered step after the last tool install, before step 9 (SSH config). Copy the binary to `/usr/local/bin` so it is on `$PATH` for all users. Wrap in `(... ) || echo "..."` so a transient network failure doesn't break the whole build.
 
 ```dockerfile
@@ -129,17 +150,24 @@ to the README's First-Time Setup list.
 
 The `update` command is `scripts/update` (a normal shell script, `COPY`'d to `/usr/local/bin/update`). It is step-numbered (e.g. `1/9`). When you add a tool:
 
-1. Increment the denominator in all step labels (e.g. `6/6` → `7/7`).
+1. Bump `TOTAL` at the top of the script — the step labels read `N/$TOTAL`, so nothing else needs renumbering.
 2. Add a new step at the end (before the closing summary echo).
 
-For npm tools, `sudo npm update -g` already covers them — no extra step needed.
+For npm tools, the explicit `@latest` reinstall block already covers them — add the package there rather than writing a step.
 
-For install-script tools, re-run the installer:
+For install-script tools, obey the one rule above. Never `curl | bash` bare in this script: it runs as the sandbox user, so the installer's default `~/.local/bin` is the *persisted* home, and the tool you just installed will shadow the image copy forever after.
 
 ```bash
-echo "N/N Updating ToolName..."
-(curl -fsSL https://example.com/install.sh | bash && (sudo cp ~/.local/bin/toolname /usr/local/bin/toolname 2>/dev/null || true)) || true
+echo "N/$TOTAL Updating ToolName..."
+# installer takes a destination
+(curl -fsSL https://example.com/install.sh | env TOOL_INSTALL_DIR=/usr/local/bin sh) || true
+# installer hardcodes ~/.local/bin
+publish_from_installer toolname https://example.com/install.sh
 ```
+
+A tool that ships its own updater (`hermes update`) should be invoked by absolute path,
+`/usr/local/bin/<tool>`, not through `$PATH` — a launcher hard-codes the install tree it
+belongs to, so PATH resolution decides *which tree gets updated*.
 
 The same bundle caveat as the install step applies — mirror whatever the Dockerfile does, or
 the update will re-break a working install.
