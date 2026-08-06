@@ -209,14 +209,17 @@ RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/in
 # npm treats a failed optional install as non-fatal — so `npm install -g` can exit 0
 # and leave the wrapper script in place while the tool itself throws "native binary
 # not installed" on every invocation. `command -v` alone would miss that entirely.
+# `go` is the odd one out: it has no --version flag, only the `go version` subcommand,
+# so it needs its own dispatch here.
 RUN set -e; \
+    ver() { case "$1" in go) go version;; *) "$1" --version;; esac; }; \
     for t in claude codex bun node go gh docker; do \
       command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; \
-      "$t" --version >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
+      ver "$t" >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
     done; \
     for t in agy herdr hermes codegraph codeburn pi; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
-      elif ! "$t" --version >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
+      elif ! ver "$t" >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \
     [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"
 
