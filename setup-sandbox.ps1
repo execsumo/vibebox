@@ -243,7 +243,7 @@ if ($ContainerStatus) {
     Write-Host "Step 2: First-time setup (once per sandbox)" -ForegroundColor Yellow
     Write-Host "  In the SSH session, run:" -ForegroundColor Cyan
     Write-Host "     onboard" -ForegroundColor Yellow
-    Write-Host "  Wires up GitHub auth, git identity, dotfiles, and CodeGraph." -ForegroundColor Cyan
+    Write-Host "  Wires up GitHub auth, git identity, and dotfiles." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Step 3: Launch your workspace" -ForegroundColor Yellow
     Write-Host "  Every login, run:" -ForegroundColor Cyan

@@ -6,7 +6,7 @@ echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
 
-TOTAL=10
+TOTAL=9
 
 # A few image-managed trees are owned by the sandbox user (see the Dockerfile), because
 # the tools that live in them update themselves by writing to their own install tree as
@@ -17,8 +17,8 @@ TOTAL=10
 # Re-take ownership here as well as at build time, so a box built from an older image is
 # repaired by running `update` instead of requiring a rebuild. The -O test only looks at
 # the top of the tree; that is the state the old images left behind, and the chown is
-# recursive. This is deliberately NOT applied to /opt/codegraph or the npm global prefix
-# — those stay root-owned and are updated under sudo below.
+# recursive. This is deliberately NOT applied to the npm global prefix — that stays
+# root-owned and is updated under sudo below.
 ensure_owned() {
   local path
   for path in "$@"; do
@@ -104,28 +104,14 @@ else
   echo "    hermes is not installed; skipping."
 fi
 echo ""
-echo "8/$TOTAL Updating CodeGraph..."
-# Must mirror the Dockerfile: the launcher resolves its bundle relative to its own
-# symlink-resolved path, so /usr/local/bin/codegraph stays a symlink into /opt/codegraph
-# rather than being copied. Point it at the installer's `current` link instead of the
-# versioned directory it writes by default — otherwise the next upgrade prunes the
-# version the launcher names and leaves a dangling symlink. Resolving `current` still
-# lands inside the real bundle, so the launcher's relative lookup is unaffected.
-(curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
-   sudo env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
- sudo chmod -R a+rX /opt/codegraph && \
- { [ -e /opt/codegraph/current/bin/codegraph ] && \
-   ln -sfn /opt/codegraph/current/bin/codegraph /usr/local/bin/codegraph; }) || true
-echo "    Re-run 'codegraph install' if you added or removed agent CLIs."
-echo ""
-echo "9/$TOTAL Updating Hermes WebUI..."
+echo "8/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
 ensure_owned /opt/hermes-webui
 (git -C /opt/hermes-webui pull --ff-only && \
  /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
  /opt/hermes-webui/ctl.sh restart) || true
 echo ""
-echo "10/$TOTAL Updating the dotfiles tool..."
+echo "9/$TOTAL Updating the dotfiles tool..."
 # A single self-contained script, installed in the image by Docker's ADD from this same
 # URL. Downloaded to a temp file and smoke-tested before being swapped in, so a truncated
 # or unavailable download cannot leave the box without a working `dotfiles` — the tool
@@ -145,11 +131,11 @@ rm -f "$DOTFILES_TMP"
 echo ""
 # Every step above is tolerated (`|| true`) so one unreachable installer cannot stop the
 # rest of the update — which also means a failure scrolls past. Close with the same check
-# the Dockerfile's step 8b runs, so the state of the toolchain after an update is stated
+# the Dockerfile's step 8 runs, so the state of the toolchain after an update is stated
 # rather than assumed. `--version` rather than `command -v`: a half-updated launcher
 # still exists and is still executable.
 echo "Verifying the toolchain..."
-for t in claude codex bun node npm gh docker hermes herdr agy codegraph codeburn pi dotfiles; do
+for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles; do
   if ! command -v "$t" >/dev/null 2>&1; then
     printf '  %-12s MISSING\n' "$t"
   elif ! "$t" --version >/dev/null 2>&1; then

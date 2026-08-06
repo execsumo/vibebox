@@ -14,7 +14,7 @@ Five steps from clone to coding:
 2. **Add your SSH public key** to `authorized_keys` (required).
 3. **Set `HERMES_WEBUI_PASSWORD`** in `.env` (only if you want the Hermes WebUI).
 4. **Run the setup script** — builds and starts the container stack.
-5. **SSH in and run `onboard`** — wires up GitHub auth, git identity, dotfiles, and CodeGraph.
+5. **SSH in and run `onboard`** — wires up GitHub auth, git identity, and dotfiles.
 
 Details on each step below.
 
@@ -33,7 +33,6 @@ Details on each step below.
 | Pi (`pi`) | AI coding agent (Earendil Works) |
 | Hermes Agent | AI coding agent (Nous Research) |
 | Hermes WebUI | Web frontend for Hermes Agent, served at `https://hermes.<tailnet>.ts.net` |
-| CodeGraph | Code-index MCP server for the agent CLIs — wired up by `onboard` |
 | codeburn | AI spend tracker (by task, tool, model, project) |
 | Node.js + npm | LTS (v22 by default) |
 | Bun | Fast JS runtime / package manager |
@@ -45,6 +44,7 @@ Details on each step below.
 | zsh | Default shell |
 | btop, htop | Resource and process monitors |
 | ripgrep, fzf, jq | Search and data tools |
+| ffmpeg | Audio/video transcoding (`ffmpeg`, `ffprobe`) |
 | Common build utilities | `build-essential`, `curl`, `wget`, etc. |
 
 ### Language servers (for editor LSP support)
@@ -218,9 +218,8 @@ This one-time script personalizes the sandbox. It is idempotent — safe to re-r
 1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
 2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
 3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
-4. **CodeGraph wiring** — runs `codegraph install`, registering CodeGraph's MCP server with every installed agent CLI (Claude Code, Codex, Hermes, Antigravity, and others) so they can query a code index of your projects
 
-Details on CodeGraph are in the [CodeGraph](#codegraph) section.
+Details on the dotfiles step are in the [Dotfiles](#dotfiles) section.
 
 ---
 
@@ -309,7 +308,7 @@ The host identity is **not** restored unless you ask for it: by default the sand
 update
 ```
 
-Upgrades every tool the image pre-installs — APT packages, all npm globals (including Bun, which is installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, CodeGraph, the Hermes WebUI, and the `dotfiles` tool — each through its own supported update path. It creates an `auto-before-update` backup first and prints an `ok` / `MISSING` / `BROKEN` line per tool at the end, so a step that failed and scrolled past is still visible. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable. The tailscale sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
+Upgrades every tool the image pre-installs — APT packages, all npm globals (including Bun, which is installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, the Hermes WebUI, and the `dotfiles` tool — each through its own supported update path. It creates an `auto-before-update` backup first and prints an `ok` / `MISSING` / `BROKEN` line per tool at the end, so a step that failed and scrolled past is still visible. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable. The tailscale sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
 
 **Claude Code and Codex do not self-update here — `update` is their update path.** The
 NodeSource `nodejs` package sets npm's prefix to `/usr`, so every npm global lives in
@@ -572,42 +571,6 @@ Logs are at `~/.hermes/webui.log`.
 
 ---
 
-## CodeGraph
-
-`onboard` handles the wiring, so there is normally nothing to do by hand. It records a
-marker at `~/.vibebox/codegraph-installed` and skips on later runs; re-run it yourself
-after adding or removing an agent CLI:
-
-```bash
-codegraph install
-```
-
-**Why this step isn't baked into the image:** it writes per-user agent config into `$HOME`
-(e.g. `~/.claude.json`), and `$HOME` is a persisted Docker volume that masks image content
-— so a build-time run would never reach your user. Running it inside the container writes
-into the volume instead, which means it **survives rebuilds**.
-
-**Using it.** Indexing is per-project — `cd` into a repo first:
-
-```bash
-codegraph init             # build this project's .codegraph/ index
-codegraph status           # index stats: files, nodes, edges, freshness
-codegraph query <symbol>   # find a symbol (also: explore, node, callers, impact)
-```
-
-Your agents reach the same index through the MCP server `onboard` registered, so you rarely
-need these by hand.
-
-> **Bare `codegraph` re-runs the installer.** With no arguments it always enters the agent
-> install flow — by upstream design, it neither detects an existing install nor shows
-> status. `codegraph status` is the view you want.
-
-**Upgrading:** use `update`, not `codegraph upgrade`. The bundle lives in `/opt/codegraph`,
-root-owned so every user can read it, which means the self-upgrade path fails with a
-permission error. `update` re-runs the installer under `sudo` with the right paths.
-
----
-
 ## Dotfiles
 
 Dotfiles are **not** managed by vibebox. They are handled by
@@ -653,10 +616,6 @@ cat ~/.dotfiles/dotfiles.manifest
 > in another. `dotfiles add` audits a directory and makes you confirm, but the
 > audit is a snapshot, not a guarantee. See dotter's README for the full list of
 > safety behaviours.
-
-CodeGraph is deliberately absent from the manifest — its state is per-project
-(`.codegraph/` and an optional `codegraph.json` at the project root), so it
-belongs in each repo, not your dotfiles.
 
 **Cross-platform tip:** guard macOS- or Linux-specific config behind an OS check so the same dotfiles work everywhere:
 

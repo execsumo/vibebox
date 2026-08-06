@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fzf \
     jq \
     zsh \
+    ffmpeg \
     bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
@@ -140,10 +141,10 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_CODING_
 RUN (curl -fsSL https://antigravity.google/cli/install.sh | bash && cp /root/.local/bin/agy /usr/local/bin/agy && chmod +x /usr/local/bin/agy) || echo "Antigravity CLI setup skipped or requires manual auth"
 
 # 6. Install Herdr CLI via the official installation script.
-# HERDR_INSTALL_DIR points the installer straight at /usr/local/bin (same pattern as
-# CodeGraph below) instead of the previous install-to-~/.local/bin-then-cp dance, which
-# silently no-op'd — a failed cp was swallowed by `|| true`, then chmod on the (missing)
-# destination failed the whole step, landing the build with no herdr on $PATH at all.
+# HERDR_INSTALL_DIR points the installer straight at /usr/local/bin instead of the previous
+# install-to-~/.local/bin-then-cp dance, which silently no-op'd — a failed cp was swallowed
+# by `|| true`, then chmod on the (missing) destination failed the whole step, landing the
+# build with no herdr on $PATH at all.
 RUN (curl -fsSL https://herdr.dev/install.sh | env HERDR_INSTALL_DIR=/usr/local/bin sh) \
     || echo "Herdr CLI setup skipped"
 
@@ -177,31 +178,7 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
      /opt/hermes-webui/.venv/bin/pip install --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
      chown -R 1000:1000 /opt/hermes-webui) || echo "Hermes WebUI setup skipped"
 
-# 8. Install CodeGraph — last tool step, since `codegraph install` wires itself into
-# whichever agent CLIs are present and should see the full set installed above.
-# NOTE: `codegraph install` is NOT run here. It writes per-user agent config into $HOME
-# (e.g. ~/.claude.json), and $HOME is a persisted volume that masks image content on
-# rebuilds — so a build-time run as root would not reach the sandbox user. Run it once
-# inside the container instead (documented in README).
-# Unlike the single-file binaries above, codegraph is a Node bundle whose launcher
-# resolves the bundle relative to its own symlink-resolved path. Copying the launcher
-# into /usr/local/bin severs that link, leaving it to exec a nonexistent /usr/local/node.
-# So let the installer place both itself, via its own env vars: the bundle in /opt
-# (world-readable) rather than the default ~/.codegraph, which as root lands under
-# /root (mode 700) and is unreadable by the sandbox user.
-# The installer points /usr/local/bin/codegraph at the *versioned* bundle it just wrote
-# (/opt/codegraph/versions/vX.Y.Z/...). It also maintains a `current` link beside it, and
-# an upgrade prunes the old version directory — so the launcher symlink is re-pointed at
-# `current` here, or the first upgrade would leave it dangling. Resolving `current` still
-# ends up inside the real bundle, so the launcher's relative bundle lookup is unaffected.
-RUN (curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | \
-       env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
-     chmod -R a+rX /opt/codegraph && \
-     { [ -e /opt/codegraph/current/bin/codegraph ] && \
-       ln -sfn /opt/codegraph/current/bin/codegraph /usr/local/bin/codegraph; }) \
-     || echo "CodeGraph setup skipped"
-
-# 8b. Verify installs so a build cannot silently succeed with tooling missing.
+# 8. Verify installs so a build cannot silently succeed with tooling missing.
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
 # Daily-drivers are checked with --version, not just `command -v`: claude and codex
@@ -217,7 +194,7 @@ RUN set -e; \
       command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; \
       ver "$t" >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
     done; \
-    for t in agy herdr hermes codegraph codeburn pi; do \
+    for t in agy herdr hermes codeburn pi; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! ver "$t" >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \
@@ -226,7 +203,7 @@ RUN set -e; \
 # Build argument to customize the SSH username (defaults to dev)
 ARG USERNAME=dev
 
-# 10. Configure the SSH daemon
+# 9. Configure the SSH daemon
 RUN mkdir /var/run/sshd && \
     # Secure defaults: No root login, enable pubkey, disable password logins
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
@@ -302,8 +279,8 @@ RUN chmod 755 /usr/local/bin/dotfiles && dotfiles version
 # /opt: chown rewrites the owner of every file it touches, and Docker copies each
 # changed file into a new layer, so recursing over /usr/lib/node_modules (every npm
 # global — npm's prefix here is /usr, set by the NodeSource deb, not /usr/local)
-# plus the codegraph bundle and the hermes-webui venv duplicates the whole
-# toolchain in the image for no benefit. Nothing needs it: every write path in
+# plus the hermes-webui venv duplicates the whole toolchain in the image for no
+# benefit. Nothing needs it: every write path in
 # `scripts/update` already runs under sudo (which is passwordless here), and
 # /opt/hermes-webui — the one tree updated without sudo — is chowned at its own step.
 #

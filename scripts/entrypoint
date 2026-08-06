@@ -33,9 +33,9 @@ if [ ! -f "$KEYDIR/ssh_host_ed25519_key" ] && [ -f "$VIBEBOX_DIR/ssh/ssh_host_ed
   rmdir "$VIBEBOX_DIR/ssh" 2>/dev/null || true
 fi
 
-# mkdir above runs as root, so .vibebox lands root-owned — but `onboard` writes its
-# marker file (codegraph-installed) there as the sandbox user, and the failed
-# redirect aborts onboard under `set -e`. Chown the directory itself.
+# mkdir above runs as root, so .vibebox lands root-owned — but it is where `onboard`
+# writes any marker files, as the sandbox user, and a failed redirect aborts onboard
+# under `set -e`. Chown the directory itself.
 # Runs every boot, so existing volumes with the old root-owned dir self-heal.
 # || true: some host bind-mount filesystems reject chown; don't abort the boot.
 chown 1000:1000 "$VIBEBOX_DIR" 2>/dev/null || true
