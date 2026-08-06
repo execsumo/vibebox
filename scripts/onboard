@@ -112,33 +112,6 @@ else
   fi
 fi
 
-# ── 4. CodeGraph agent wiring ─────────────────────────────────────────────────
-# Registers CodeGraph's MCP server with whichever agent CLIs are installed. This
-# cannot be baked into the image: it writes per-user config into $HOME (e.g.
-# ~/.claude.json), and $HOME is a persisted volume that masks image content. Run
-# here it lands in the volume and survives rebuilds.
-step "CodeGraph agent wiring"
-CODEGRAPH_MARKER="$HOME/.vibebox/codegraph-installed"
-
-if ! command -v codegraph &>/dev/null; then
-  warn "codegraph not installed — skipping (rebuild the image to install it)"
-elif [ -f "$CODEGRAPH_MARKER" ]; then
-  ok "Already wired up ($(cat "$CODEGRAPH_MARKER"))"
-  echo "    Re-run with: codegraph install"
-else
-  if codegraph install; then
-    # Bookkeeping only — never let it abort the run (set -e) and skip the steps
-    # below. A missing marker only costs a redundant re-run next time.
-    mkdir -p "$(dirname "$CODEGRAPH_MARKER")" 2>/dev/null || true
-    date -u '+wired %Y-%m-%d' > "$CODEGRAPH_MARKER" 2>/dev/null \
-      || warn "Could not write marker ${CODEGRAPH_MARKER} (install itself succeeded)"
-    ok "CodeGraph registered with the installed agent CLIs"
-    echo "    Index a project by running 'codegraph' inside its directory."
-  else
-    warn "codegraph install failed — re-run 'codegraph install' manually"
-  fi
-fi
-
 echo ""
 echo "================================================"
 echo "  Setup complete. Enjoy your sandbox."

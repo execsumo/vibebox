@@ -252,7 +252,7 @@ if [ -n "$ContainerStatus" ]; then
     echo "${YELLOW}Step 2: First-time setup (once per sandbox)${RESET}"
     echo "${CYAN}  In the SSH session, run:${RESET}"
     echo "${YELLOW}     onboard${RESET}"
-    echo "${CYAN}  Wires up GitHub auth, git identity, dotfiles, and CodeGraph.${RESET}"
+    echo "${CYAN}  Wires up GitHub auth, git identity, and dotfiles.${RESET}"
     echo ""
     echo "${YELLOW}Step 3: Launch your workspace${RESET}"
     echo "${CYAN}  Every login, run:${RESET}"

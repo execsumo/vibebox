@@ -8,7 +8,7 @@ This document explains where each piece lives and what to touch when you add a n
 
 | File | What changes |
 |---|---|
-| `Dockerfile` | Install step + build verification (step 8b) |
+| `Dockerfile` | Install step + build verification (step 8) |
 | `scripts/onboard` | Per-user config step, if the tool has one (see below) |
 | `scripts/update` | Add an update step for the tool (real file, not a heredoc) |
 | `.env.example` | API key variable (if the tool needs one) |
@@ -17,7 +17,7 @@ This document explains where each piece lives and what to touch when you add a n
 
 The in-container commands (`onboard`, `backup`, `update`, `launch`, `tailscale`, `hermes-webui`) and the `entrypoint` are real files in `scripts/`, `COPY`'d to `/usr/local/bin` by the Dockerfile — edit them directly. Dotfile paths are **not** in this repo any more: they live in the manifest inside your own dotfiles repo, managed by [dotter](https://github.com/execsumo/dotter).
 
-If a tool is one you depend on daily, add it to the hard-fail loop in the Dockerfile's step 8b verification (`for t in claude codex bun node gh docker`); optional agents go in the warn loop. Anything installed with a tolerated (`|| echo ...`) step belongs in the warn loop — a hard-fail check on a tolerated install just relocates the build break.
+If a tool is one you depend on daily, add it to the hard-fail loop in the Dockerfile's step 8 verification (`for t in claude codex bun node gh docker`); optional agents go in the warn loop. Anything installed with a tolerated (`|| echo ...`) step belongs in the warn loop — a hard-fail check on a tolerated install just relocates the build break.
 
 
 ## Install step patterns
@@ -35,7 +35,7 @@ RUN npm install -g \
 ```
 
 ### Official install script
-Add a numbered step after the last tool install, before step 8 (SSH config). Copy the binary to `/usr/local/bin` so it is on `$PATH` for all users. Wrap in `(... ) || echo "..."` so a transient network failure doesn't break the whole build.
+Add a numbered step after the last tool install, before step 9 (SSH config). Copy the binary to `/usr/local/bin` so it is on `$PATH` for all users. Wrap in `(... ) || echo "..."` so a transient network failure doesn't break the whole build.
 
 ```dockerfile
 # N. Install ToolName via the official installer
@@ -47,20 +47,25 @@ RUN (curl -fsSL https://example.com/install.sh | bash && \
 > **The `cp` only works for self-contained single-file binaries** (herdr, hermes, agy).
 > If the installer drops a *bundle* — a launcher script plus a runtime and libs — copying
 > the launcher out of the bundle severs the relative path it uses to find its own runtime.
-> CodeGraph is the cautionary example: its launcher resolves the bundle relative to its
-> symlink-resolved path, so the `cp` above left it exec'ing a nonexistent `/usr/local/node`.
+> A Node-bundle launcher typically resolves its bundle relative to its own symlink-resolved
+> path, so the `cp` above leaves it exec'ing a nonexistent `/usr/local/node`. (This bit us
+> on a tool since removed from the image; the lesson outlived it.)
 >
 > For bundles, use the installer's own destination env vars and let it create the symlink.
 > Put the bundle somewhere world-readable: run as root, the default `~/.foo` lands under
-> `/root` (mode 700) and is invisible to the sandbox user. CodeGraph, worked:
+> `/root` (mode 700) and is invisible to the sandbox user:
 >
 > ```dockerfile
 > RUN (curl -fsSL https://.../install.sh | \
->        env CODEGRAPH_INSTALL_DIR=/opt/codegraph CODEGRAPH_BIN_DIR=/usr/local/bin sh && \
->      chmod -R a+rX /opt/codegraph) || echo "CodeGraph setup skipped"
+>        env TOOL_INSTALL_DIR=/opt/toolname TOOL_BIN_DIR=/usr/local/bin sh && \
+>      chmod -R a+rX /opt/toolname) || echo "ToolName setup skipped"
 > ```
 >
-> The build-time check (step 8b) runs `<tool> --version`, not just `command -v`, precisely
+> If the installer points the launcher at a *versioned* directory it just wrote, re-point
+> the symlink at whatever stable `current` link it maintains — otherwise the first upgrade
+> prunes the version the launcher names and leaves it dangling.
+>
+> The build-time check (step 8) runs `<tool> --version`, not just `command -v`, precisely
 > because a broken launcher still exists and is executable.
 
 ### apt package
@@ -115,8 +120,8 @@ survives rebuilds. Guard it with a marker file under `~/.vibebox/` so re-running
 stays idempotent, and keep the failure path non-fatal — `onboard` runs under
 `set -euo pipefail`, so use `if cmd; then ... else warn ...; fi` rather than a bare call.
 
-CodeGraph (`codegraph install`, marker `~/.vibebox/codegraph-installed`) is the worked
-example. Also add the step to the README's First-Time Setup list.
+Convention: `~/.vibebox/<tool>-installed`, holding the date it was wired. Also add the step
+to the README's First-Time Setup list.
 
 ---
 
@@ -137,7 +142,7 @@ echo "N/N Updating ToolName..."
 ```
 
 The same bundle caveat as the install step applies — mirror whatever the Dockerfile does, or
-the update will re-break a working install. CodeGraph's update step is the worked example.
+the update will re-break a working install.
 
 ---
 
@@ -194,13 +199,13 @@ Pin a tag or SHA there if you want reproducible builds.
 | Herdr | install script | `/usr/local/bin/herdr` | re-run installer | `.config/herdr/` |
 | Pi | npm global (tolerated, `--ignore-scripts`) | `/usr/local/bin/pi` | `npm update -g` | `.pi/` |
 | Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
-| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 9) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
-| CodeGraph | install script (bundle in `/opt/codegraph`) | `/usr/local/bin/codegraph` → symlink into bundle | re-run installer via `update` (not `codegraph upgrade`) | — (per-project `.codegraph/`) |
+| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 8) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
 | GitHub CLI | apt (official repo) | `/usr/bin/gh` | apt upgrade | — |
 | Docker | apt (official repo) | `/usr/bin/docker` | apt upgrade | — |
 | btop, htop | apt | `/usr/bin/btop` | apt upgrade | — |
+| ffmpeg | apt | `/usr/bin/ffmpeg` | apt upgrade | — |
 | `tailscale` | wrapper script | `/usr/local/bin/tailscale` | edit `scripts/tailscale` | — |
 | `hermes-webui` | wrapper script | `/usr/local/bin/hermes-webui` | edit `scripts/hermes-webui` | — |
 
