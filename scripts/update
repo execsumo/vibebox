@@ -83,6 +83,12 @@ echo "6/$TOTAL Updating Antigravity CLI (agy)..."
 # failed download from copying nothing over a working binary.
 (curl -fsSL https://antigravity.google/cli/install.sh | bash && \
  { [ -x "$HOME/.local/bin/agy" ] && sudo cp -f "$HOME/.local/bin/agy" /usr/local/bin/agy; }) || true
+# Delete the per-user copy the installer just wrote. ~/.local/bin comes *before*
+# /usr/local/bin on PATH, so leaving it behind means every later shell runs the home
+# copy while this script keeps updating the image one — the two silently drift. This is
+# how an old `update` left rtk, herdr and hermes shadowed for weeks; see the shadow
+# check at the end of this script.
+rm -f "$HOME/.local/bin/agy"
 echo ""
 echo "7/$TOTAL Updating Hermes Agent..."
 # Use the agent's own updater: a git pull + dependency sync inside
@@ -90,8 +96,11 @@ echo "7/$TOTAL Updating Hermes Agent..."
 # run as the invoking user — hence the ownership guard. uv's shared cache/toolchain dir
 # is written during that sync, so it needs the same treatment.
 ensure_owned /usr/local/lib/hermes-agent /usr/local/share/uv
-if command -v hermes >/dev/null 2>&1; then
-  hermes update --yes || {
+# Invoke the image copy by absolute path, not via PATH. `hermes` is a launcher that hard-
+# codes the install tree it belongs to, so a stray ~/.local/bin/hermes would send this
+# step off to update a *different* tree than the one owned and verified above.
+if [ -x /usr/local/bin/hermes ]; then
+  /usr/local/bin/hermes update --yes || {
     echo "    'hermes update' failed — falling back to a reinstall over the same tree."
     # HERMES_INSTALL_DIR pins the installer to the tree /usr/local/bin/hermes already
     # points at, so the launcher stays valid instead of a second copy appearing under
@@ -135,15 +144,31 @@ echo ""
 # rather than assumed. `--version` rather than `command -v`: a half-updated launcher
 # still exists and is still executable.
 echo "Verifying the toolchain..."
+SHADOWED=0
 for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles; do
-  if ! command -v "$t" >/dev/null 2>&1; then
+  RESOLVED="$(command -v "$t" 2>/dev/null || true)"
+  if [ -z "$RESOLVED" ]; then
     printf '  %-12s MISSING\n' "$t"
   elif ! "$t" --version >/dev/null 2>&1; then
     printf '  %-12s BROKEN (installed, but fails to run)\n' "$t"
+  elif [ "$RESOLVED" = "$HOME/.local/bin/$t" ] && [ -e "/usr/local/bin/$t" ]; then
+    # ~/.local/bin precedes /usr/local/bin on PATH and lives in the persisted home, so a
+    # copy left there outlives every rebuild and wins over the image-managed one this
+    # script just updated. Report rather than delete: the home copy is occasionally the
+    # one you want, and silently removing a binary out from under a running agent is
+    # worse than saying so.
+    printf '  %-12s SHADOWED (running %s, not /usr/local/bin/%s)\n' "$t" "$RESOLVED" "$t"
+    SHADOWED=1
   else
     printf '  %-12s ok\n' "$t"
   fi
 done
+if [ "$SHADOWED" -eq 1 ]; then
+  echo ""
+  echo "  A tool above resolves to a copy in ~/.local/bin that predates the image one."
+  echo "  That copy is not updated by this script. Remove it to fall back to the image:"
+  echo "      rm ~/.local/bin/<tool>"
+fi
 if [ -x /opt/hermes-webui/ctl.sh ]; then
   printf '  %-12s ok\n' "hermes-webui"
 else
