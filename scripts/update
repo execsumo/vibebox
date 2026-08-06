@@ -8,25 +8,33 @@ echo "=============================================="
 
 TOTAL=9
 
-# A few image-managed trees are owned by the sandbox user (see the Dockerfile), because
-# the tools that live in them update themselves by writing to their own install tree as
-# the invoking user — no sudo anywhere in their update paths. A root-owned tree makes
-# such a tool permanently un-updatable: `hermes update` failed at its first step with
-# "cannot open '.git/FETCH_HEAD': Permission denied".
+# Every tool this image installs lives in exactly one place: /usr/local/bin for the
+# binary, /usr/local/lib/<tool> for a bundle. Both are image-managed, and both are owned
+# by the sandbox user at build time so a tool's own updater can write to its tree without
+# sudo. Nothing here is installed into $HOME, and that is a hard rule rather than a
+# preference: $HOME is a persisted volume, and ~/.local/bin precedes /usr/local/bin on
+# PATH — so a binary that lands there outlives every rebuild and permanently shadows the
+# copy this script maintains, with no error anywhere to say so.
 #
-# Re-take ownership here as well as at build time, so a box built from an older image is
-# repaired by running `update` instead of requiring a rebuild. The -O test only looks at
-# the top of the tree; that is the state the old images left behind, and the chown is
-# recursive. This is deliberately NOT applied to the npm global prefix — that stays
-# root-owned and is updated under sudo below.
-ensure_owned() {
-  local path
-  for path in "$@"; do
-    [ -e "$path" ] || continue
-    [ -O "$path" ] && continue
-    echo "    Taking ownership of $path (image predates it being user-owned)..."
-    sudo chown -R "$(id -u):$(id -g)" "$path" || true
-  done
+# Upstream installers come in two shapes, and each gets the treatment that keeps the rule
+# true by construction:
+#
+#   * takes a destination env var  → point it straight at /usr/local/bin (herdr, hermes).
+#   * hardcodes ~/.local/bin       → publish_from_installer below.
+publish_from_installer() {
+  local name="$1" url="$2" scratch rc=0
+  # A throwaway HOME. The installer writes its ~/.local/bin into a temp dir that is
+  # deleted on the way out, so only the finished binary survives, in the one place this
+  # image manages. Prevention, not detection: there is no state left to go stale.
+  scratch="$(mktemp -d)"
+  HOME="$scratch" bash -c "curl -fsSL '$url' | bash" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ] && [ -x "$scratch/.local/bin/$name" ]; then
+    # No sudo: /usr/local/bin is chowned to the sandbox user in the Dockerfile.
+    install -m 755 "$scratch/.local/bin/$name" "/usr/local/bin/$name"
+  else
+    echo "    $name update skipped"
+  fi
+  rm -rf "$scratch"
 }
 
 echo "1/$TOTAL Creating automatic safety backup..."
@@ -78,44 +86,25 @@ echo "5/$TOTAL Updating Herdr..."
 (curl -fsSL https://herdr.dev/install.sh | sudo env HERDR_INSTALL_DIR=/usr/local/bin sh) || true
 echo ""
 echo "6/$TOTAL Updating Antigravity CLI (agy)..."
-# No install-dir env var upstream, so it takes its per-user path and the binary is
-# published onto the shared PATH the way the Dockerfile does. The -x guard keeps a
-# failed download from copying nothing over a working binary.
-(curl -fsSL https://antigravity.google/cli/install.sh | bash && \
- { [ -x "$HOME/.local/bin/agy" ] && sudo cp -f "$HOME/.local/bin/agy" /usr/local/bin/agy; }) || true
-# Delete the per-user copy the installer just wrote. ~/.local/bin comes *before*
-# /usr/local/bin on PATH, so leaving it behind means every later shell runs the home
-# copy while this script keeps updating the image one — the two silently drift. This is
-# how an old `update` left rtk, herdr and hermes shadowed for weeks; see the shadow
-# check at the end of this script.
-rm -f "$HOME/.local/bin/agy"
+# No install-dir env var upstream — it hardcodes ~/.local/bin, so it runs against a
+# throwaway HOME.
+publish_from_installer agy https://antigravity.google/cli/install.sh
 echo ""
 echo "7/$TOTAL Updating Hermes Agent..."
-# Use the agent's own updater: a git pull + dependency sync inside
-# /usr/local/lib/hermes-agent (the FHS layout its installer picks for a root install),
-# run as the invoking user — hence the ownership guard. uv's shared cache/toolchain dir
-# is written during that sync, so it needs the same treatment.
-ensure_owned /usr/local/lib/hermes-agent /usr/local/share/uv
-# Invoke the image copy by absolute path, not via PATH. `hermes` is a launcher that hard-
-# codes the install tree it belongs to, so a stray ~/.local/bin/hermes would send this
-# step off to update a *different* tree than the one owned and verified above.
-if [ -x /usr/local/bin/hermes ]; then
-  /usr/local/bin/hermes update --yes || {
-    echo "    'hermes update' failed — falling back to a reinstall over the same tree."
-    # HERMES_INSTALL_DIR pins the installer to the tree /usr/local/bin/hermes already
-    # points at, so the launcher stays valid instead of a second copy appearing under
-    # ~/.hermes. Root-run, so hand the tree back afterwards.
-    (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | \
-       sudo env HERMES_INSTALL_DIR=/usr/local/lib/hermes-agent bash && \
-     sudo chown -R "$(id -u):$(id -g)" /usr/local/lib/hermes-agent /usr/local/share/uv) || true
-  }
-else
-  echo "    hermes is not installed; skipping."
-fi
+# The agent's own updater: a git pull + dependency sync inside its install tree, run as
+# the invoking user. /usr/local/lib/hermes-agent and uv's shared cache are chowned to
+# that user at build time, so no ownership work is needed here.
+#
+# Absolute path, not PATH: `hermes` is a launcher that hard-codes the tree it belongs to,
+# so this must name the tree the image owns rather than whichever launcher happens to
+# resolve first. If it fails, the closing verification reports it and the fix is a
+# rebuild — a reinstall path here would be a second way to produce an install tree,
+# which is the thing this script exists to avoid.
+/usr/local/bin/hermes update --yes || echo "    hermes update skipped"
 echo ""
 echo "8/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
-ensure_owned /opt/hermes-webui
+# /opt/hermes-webui is chowned to the sandbox user at build time, so this needs no sudo.
 (git -C /opt/hermes-webui pull --ff-only && \
  /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
  /opt/hermes-webui/ctl.sh restart) || true
@@ -144,31 +133,15 @@ echo ""
 # rather than assumed. `--version` rather than `command -v`: a half-updated launcher
 # still exists and is still executable.
 echo "Verifying the toolchain..."
-SHADOWED=0
 for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles; do
-  RESOLVED="$(command -v "$t" 2>/dev/null || true)"
-  if [ -z "$RESOLVED" ]; then
+  if ! command -v "$t" >/dev/null 2>&1; then
     printf '  %-12s MISSING\n' "$t"
   elif ! "$t" --version >/dev/null 2>&1; then
     printf '  %-12s BROKEN (installed, but fails to run)\n' "$t"
-  elif [ "$RESOLVED" = "$HOME/.local/bin/$t" ] && [ -e "/usr/local/bin/$t" ]; then
-    # ~/.local/bin precedes /usr/local/bin on PATH and lives in the persisted home, so a
-    # copy left there outlives every rebuild and wins over the image-managed one this
-    # script just updated. Report rather than delete: the home copy is occasionally the
-    # one you want, and silently removing a binary out from under a running agent is
-    # worse than saying so.
-    printf '  %-12s SHADOWED (running %s, not /usr/local/bin/%s)\n' "$t" "$RESOLVED" "$t"
-    SHADOWED=1
   else
     printf '  %-12s ok\n' "$t"
   fi
 done
-if [ "$SHADOWED" -eq 1 ]; then
-  echo ""
-  echo "  A tool above resolves to a copy in ~/.local/bin that predates the image one."
-  echo "  That copy is not updated by this script. Remove it to fall back to the image:"
-  echo "      rm ~/.local/bin/<tool>"
-fi
 if [ -x /opt/hermes-webui/ctl.sh ]; then
   printf '  %-12s ok\n' "hermes-webui"
 else

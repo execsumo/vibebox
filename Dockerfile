@@ -136,6 +136,15 @@ RUN npm install -g codeburn@${CODEBURN_VERSION} || echo "codeburn setup skipped"
 # fail a build that already produced the whole core toolchain.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} || echo "Pi setup skipped"
 
+# ── Tool install rule ─────────────────────────────────────────────────────────────────
+# Every tool below lands in /usr/local/bin (binary) and, for bundles, /usr/local/lib/<tool>.
+# Never in a user's $HOME: that is a persisted volume, and ~/.local/bin precedes
+# /usr/local/bin on PATH, so anything left there outlives every rebuild and silently
+# shadows the copy `update` maintains. The steps here run as root, whose $HOME is
+# ephemeral, so a per-user path taken during the build is discarded with the layer —
+# `scripts/update` runs as the sandbox user and has to work harder for the same
+# guarantee (see publish_from_installer there).
+
 # 5. Install Antigravity CLI (agy) via the official installer
 # (Includes a safe fallback in case the external link requires specific host context or is not reachable)
 RUN (curl -fsSL https://antigravity.google/cli/install.sh | bash && cp /root/.local/bin/agy /usr/local/bin/agy && chmod +x /usr/local/bin/agy) || echo "Antigravity CLI setup skipped or requires manual auth"
