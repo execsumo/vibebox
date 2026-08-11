@@ -45,7 +45,20 @@ Details on each step below.
 | btop, htop | Resource and process monitors |
 | ripgrep, fzf, jq | Search and data tools |
 | ffmpeg | Audio/video transcoding (`ffmpeg`, `ffprobe`) |
+| docling | Document conversion — PDF/DOCX/PPTX/HTML → Markdown or JSON (`docling` CLI + `import docling`) |
+| poppler-utils | PDF command-line tools (`pdftotext`, `pdfinfo`, `pdfimages`, `pdftoppm`) |
+| pdftotext (Python) | Poppler bindings for PDF text extraction from Python (`import pdftotext`) |
 | Common build utilities | `build-essential`, `curl`, `wget`, etc. |
+
+`docling` and the `pdftotext` bindings are installed into the system Python, so `import docling` / `import pdftotext` work from any script without activating a venv.
+
+Note that docling is not a small dependency: it pulls in PyTorch and the layout/OCR models' runtime, and adds roughly **1.7 GB** to the image even on the **CPU-only** PyTorch wheels this build defaults to. (PyPI's default wheel is the CUDA build, which is several GB more again.) If you run the GPU overlay (`docker-compose.gpu.yml`) and want CUDA wheels instead, rebuild with:
+
+```bash
+docker compose build --build-arg DOCLING_TORCH_INDEX=https://download.pytorch.org/whl/cu124
+```
+
+Set it to an empty string to take PyPI's default wheel. The choice is remembered in the image and reapplied by `update`.
 
 ### Language servers (for editor LSP support)
 

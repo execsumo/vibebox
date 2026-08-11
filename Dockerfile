@@ -38,6 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    python3-dev \
+    libpoppler-cpp-dev \
+    poppler-utils \
     golang-go \
     ca-certificates \
     iputils-ping \
@@ -187,6 +190,40 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
      /opt/hermes-webui/.venv/bin/pip install --no-cache-dir -r /opt/hermes-webui/requirements.txt && \
      chown -R 1000:1000 /opt/hermes-webui) || echo "Hermes WebUI setup skipped"
 
+# 7c. Install the document-extraction tooling: docling (PDF/Office/HTML → Markdown,
+# JSON, structured docs) and the pdftotext Python bindings.
+#
+# Into the *system* Python rather than a private venv, deliberately: both are libraries
+# first — the point is that `import docling` / `import pdftotext` work from any script
+# the user writes, with no venv to source. Ubuntu 24.04 marks its Python
+# externally-managed (PEP 668) so pip needs --break-system-packages; that is safe here
+# because nothing else in this image installs into the system Python (hermes has its own
+# uv environment, hermes-webui its own venv). It also keeps the tool rule above true by
+# construction rather than by cleanup: pip's Debian "posix_local" scheme puts modules in
+# /usr/local/lib/python3*/dist-packages and console scripts in /usr/local/bin, so
+# `docling` lands on PATH in an image-managed path and never in $HOME.
+#
+# torch is docling's heaviest dependency and PyPI's default wheel is the CUDA build
+# (several GB of it unused on a CPU box). DOCLING_TORCH_INDEX points at the CPU-only
+# wheel index instead; rebuild with
+# --build-arg DOCLING_TORCH_INDEX=https://download.pytorch.org/whl/cu124 (or "" for
+# PyPI's default) when running under docker-compose.gpu.yml. It is re-exported as ENV so
+# `update` re-applies the same choice instead of silently pulling the CUDA wheel on the
+# first upgrade.
+#
+# pdftotext compiles a C++ extension against libpoppler-cpp-dev + python3-dev (step 1).
+# It is the binding only — the familiar `pdftotext` *command* is a separate thing, from
+# poppler-utils, also installed in step 1.
+#
+# Tolerated like the other optional installers: a PyPI hiccup on a dependency tree this
+# large must not fail a build that already produced the whole core toolchain.
+ARG DOCLING_TORCH_INDEX=https://download.pytorch.org/whl/cpu
+ENV DOCLING_TORCH_INDEX=${DOCLING_TORCH_INDEX}
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+        ${DOCLING_TORCH_INDEX:+--extra-index-url "${DOCLING_TORCH_INDEX}"} \
+        docling pdftotext \
+    || echo "docling / pdftotext setup skipped"
+
 # 8. Verify installs so a build cannot silently succeed with tooling missing.
 # Hard-fail on the daily-driver tools; loud-warn on the optional CLIs whose
 # installers are tolerated above (a network blip shouldn't kill a 10-minute build).
@@ -197,16 +234,22 @@ RUN (git clone --depth 1 https://github.com/nesquena/hermes-webui.git /opt/herme
 # not installed" on every invocation. `command -v` alone would miss that entirely.
 # `go` is the odd one out: it has no --version flag, only the `go version` subcommand,
 # so it needs its own dispatch here.
+# The pdftotext *bindings* are the other exception: no CLI to interrogate, so importing
+# them is the only check that says whether the compiled extension actually loads. (The
+# `pdftotext` command on PATH is poppler-utils, a separate apt package — a failure there
+# would already have failed step 1.)
 RUN set -e; \
     ver() { case "$1" in go) go version;; *) "$1" --version;; esac; }; \
     for t in claude codex bun node go gh docker; do \
       command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; \
       ver "$t" >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
     done; \
-    for t in agy herdr hermes codeburn pi; do \
+    for t in agy herdr hermes codeburn pi docling; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! ver "$t" >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \
+    python3 -c 'import pdftotext' >/dev/null 2>&1 \
+      || echo "WARNING: pdftotext bindings not installed (non-fatal)"; \
     [ -x /opt/hermes-webui/ctl.sh ] || echo "WARNING: hermes-webui not installed (non-fatal)"
 
 # Build argument to customize the SSH username (defaults to dev)

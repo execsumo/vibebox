@@ -101,6 +101,32 @@ Add to the existing `apt-get install -y` block (step 1).
 > hermes-webui, whose `update` step does a plain `git pull`), chown that one directory
 > at its own install step, the way step 7b does.
 
+### Python package (PyPI)
+Add to the `pip install` in step 7c. There is no venv: these go into the **system**
+Python so `import <pkg>` works from any script the user writes, without a venv to
+source. Two consequences worth knowing before adding one:
+
+- Ubuntu 24.04 marks its Python externally-managed (PEP 668), so pip needs
+  `--break-system-packages`. That is only tolerable because nothing else in this image
+  installs into the system Python — hermes uses its own uv environment, hermes-webui its
+  own venv. If a package's dependency pins ever start fighting an apt `python3-*`
+  package, the answer is to move *that* package to a venv under `/usr/local/lib/<tool>`
+  with a symlink into `/usr/local/bin`, not to keep patching around it.
+- The tool-install rule holds by construction, not by cleanup: pip's Debian
+  "posix_local" scheme puts modules in `/usr/local/lib/python3*/dist-packages` and
+  console scripts in `/usr/local/bin`, both image-managed and neither in `$HOME`.
+
+A package needing headers to compile (pdftotext builds against poppler-cpp) also needs
+its `-dev` apt packages added to step 1.
+
+> **The torch knob.** docling pulls PyTorch, and PyPI's default wheel is the CUDA build —
+> several GB that a CPU box never uses. `ARG DOCLING_TORCH_INDEX` defaults to the
+> CPU-only wheel index and is re-exported as `ENV` so `update` reapplies the same choice
+> instead of pulling the CUDA wheel on the first upgrade. Rebuild with
+> `--build-arg DOCLING_TORCH_INDEX=https://download.pytorch.org/whl/cu124` for the GPU
+> overlay, or `""` for PyPI's default. The update step tests it with `${VAR-default}`,
+> not `${VAR:-default}`, so a deliberate empty value is not overruled.
+
 ### Wrapper script on `$PATH`
 When the "tool" is really a shortcut — delegating to a sidecar container, or to a
 long path inside `/opt` — add a file to `scripts/`. `COPY scripts/ /usr/local/bin/`
@@ -234,6 +260,9 @@ Pin a tag or SHA there if you want reproducible builds.
 | Docker | apt (official repo) | `/usr/bin/docker` | apt upgrade | — |
 | btop, htop | apt | `/usr/bin/btop` | apt upgrade | — |
 | ffmpeg | apt | `/usr/bin/ffmpeg` | apt upgrade | — |
+| poppler-utils | apt | `/usr/bin/pdftotext` | apt upgrade | — |
+| docling | system pip, `--break-system-packages` (tolerated) | `/usr/local/bin/docling` | `pip install --upgrade` (update step 9) | — |
+| pdftotext (Python) | system pip, `--break-system-packages` (tolerated) | module only, no binary | `pip install --upgrade` (update step 9) | — |
 | `tailscale` | wrapper script | `/usr/local/bin/tailscale` | edit `scripts/tailscale` | — |
 | `hermes-webui` | wrapper script | `/usr/local/bin/hermes-webui` | edit `scripts/hermes-webui` | — |
 

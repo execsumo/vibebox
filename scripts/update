@@ -6,7 +6,7 @@ echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
 
-TOTAL=9
+TOTAL=10
 
 # Every tool this image installs lives in exactly one place: /usr/local/bin for the
 # binary, /usr/local/lib/<tool> for a bundle. Both are image-managed, and both are owned
@@ -109,7 +109,26 @@ echo "8/$TOTAL Updating Hermes WebUI..."
  /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
  /opt/hermes-webui/ctl.sh restart) || true
 echo ""
-echo "9/$TOTAL Updating the dotfiles tool..."
+echo "9/$TOTAL Updating docling and the pdftotext bindings..."
+# System-Python installs (see the Dockerfile's step 7c for why they are not in a venv),
+# so this needs sudo and PEP 668's --break-system-packages, same as the build.
+#
+# DOCLING_TORCH_INDEX is baked into the image as ENV from the build arg and reaches this
+# shell through the entrypoint's ~/.ssh/environment forwarding. It has to be handed to
+# pip explicitly via `sudo env`: sudo resets the environment, and without the CPU wheel
+# index a plain upgrade would quietly pull PyPI's multi-gigabyte CUDA torch build.
+#
+# `-` and not `:-`: the fallback is for an image built before this arg existed (variable
+# absent entirely). Set-but-empty is a deliberate choice — someone who built with
+# --build-arg DOCLING_TORCH_INDEX="" asked for PyPI's default wheel, and re-imposing the
+# CPU index here would quietly overrule them on every update.
+sudo env DOCLING_TORCH_INDEX="${DOCLING_TORCH_INDEX-https://download.pytorch.org/whl/cpu}" \
+  sh -c 'python3 -m pip install --upgrade --no-cache-dir --break-system-packages \
+           ${DOCLING_TORCH_INDEX:+--extra-index-url "$DOCLING_TORCH_INDEX"} \
+           docling pdftotext' \
+  || echo "    docling / pdftotext update skipped"
+echo ""
+echo "10/$TOTAL Updating the dotfiles tool..."
 # A single self-contained script, installed in the image by Docker's ADD from this same
 # URL. Downloaded to a temp file and smoke-tested before being swapped in, so a truncated
 # or unavailable download cannot leave the box without a working `dotfiles` — the tool
@@ -133,7 +152,7 @@ echo ""
 # rather than assumed. `--version` rather than `command -v`: a half-updated launcher
 # still exists and is still executable.
 echo "Verifying the toolchain..."
-for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles; do
+for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles docling; do
   if ! command -v "$t" >/dev/null 2>&1; then
     printf '  %-12s MISSING\n' "$t"
   elif ! "$t" --version >/dev/null 2>&1; then
@@ -142,6 +161,14 @@ for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfil
     printf '  %-12s ok\n' "$t"
   fi
 done
+# The pdftotext bindings ship no CLI, so importing them is the only check that says
+# whether the compiled extension still loads — the `pdftotext` command on PATH is
+# poppler-utils, a different package entirely.
+if python3 -c 'import pdftotext' >/dev/null 2>&1; then
+  printf '  %-12s ok\n' "pdftotext"
+else
+  printf '  %-12s MISSING\n' "pdftotext"
+fi
 if [ -x /opt/hermes-webui/ctl.sh ]; then
   printf '  %-12s ok\n' "hermes-webui"
 else
