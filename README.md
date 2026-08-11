@@ -300,7 +300,7 @@ This one covers home only — it runs as the sandbox user, which cannot read the
 
 A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them), plus the SSH host keys under `ssh-identity/`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again.
 
-The host identity is **not** restored unless you ask for it: by default the sandbox keeps the identity it already has, so a restore never triggers "host key changed" warnings on your clients. Passing `--restore-identity` adopts the archived keys instead — expect each client to warn once. Archives made before this existed have no `ssh-identity/` entry; the flag then reports that and leaves the current identity alone. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`, `auto-before-update`) are kept until you delete them.
+The host identity is **not** restored unless you ask for it: by default the sandbox keeps the identity it already has, so a restore never triggers "host key changed" warnings on your clients. Passing `--restore-identity` adopts the archived keys instead — expect each client to warn once. Archives made before this existed have no `ssh-identity/` entry; the flag then reports that and leaves the current identity alone. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`) are kept until you delete them.
 
 ### Update tools
 
@@ -308,7 +308,7 @@ The host identity is **not** restored unless you ask for it: by default the sand
 update
 ```
 
-Upgrades every tool the image pre-installs — APT packages, all npm globals (including Bun, which is installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, the Hermes WebUI, and the `dotfiles` tool — each through its own supported update path. It creates an `auto-before-update` backup first and prints an `ok` / `MISSING` / `BROKEN` line per tool at the end, so a step that failed and scrolled past is still visible. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable. The tailscale sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
+Upgrades every tool the image pre-installs — APT packages, all npm globals (including Bun, which is installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, the Hermes WebUI, and the `dotfiles` tool — each through its own supported update path. It does not take a backup first — run `backup` yourself beforehand if you want a safety snapshot — and prints an `ok` / `MISSING` / `BROKEN` line per tool at the end, so a step that failed and scrolled past is still visible. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable. The tailscale sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
 
 **Claude Code and Codex do not self-update here — `update` is their update path.** The
 NodeSource `nodejs` package sets npm's prefix to `/usr`, so every npm global lives in

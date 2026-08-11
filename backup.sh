@@ -96,7 +96,7 @@ if docker run "${DOCKER_ARGS[@]}" alpine tar "${TAR_ARGS[@]}"; then
     fi
 
     # Prune only timestamped backups (-backup-YYYYMMDD-HHMMSS.tar.gz), so labeled
-    # safety snapshots (before-refactor, pre-restore, auto-before-update) are kept.
+    # safety snapshots (before-refactor, pre-restore) are kept.
     # The timestamp is matched with a portable glob (GNU find lacks BSD/macOS
     # -regextype), so this works on Linux and macOS hosts alike.
     ts='[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
