@@ -95,7 +95,7 @@ try {
     }
 
     # Prune only timestamped backups (-backup-YYYYMMDD-HHMMSS.tar.gz), so labeled
-    # safety snapshots (before-refactor, pre-restore, auto-before-update) are kept.
+    # safety snapshots (before-refactor, pre-restore) are kept.
     Get-ChildItem -Path $BackupsDir -Filter "$SandboxName-backup-*.tar.gz" |
         Where-Object { $_.Name -match '-backup-\d{8}-\d{6}\.tar\.gz$' } |
         Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$RetentionDays) } |

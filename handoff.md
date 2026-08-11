@@ -174,7 +174,7 @@ to the README's First-Time Setup list.
 
 ## Update step
 
-The `update` command is `scripts/update` (a normal shell script, `COPY`'d to `/usr/local/bin/update`). It is step-numbered (e.g. `1/9`). When you add a tool:
+The `update` command is `scripts/update` (a normal shell script, `COPY`'d to `/usr/local/bin/update`). It is step-numbered (e.g. `1/8`). When you add a tool:
 
 1. Bump `TOTAL` at the top of the script — the step labels read `N/$TOTAL`, so nothing else needs renumbering.
 2. Add a new step at the end (before the closing summary echo).
@@ -253,7 +253,7 @@ Pin a tag or SHA there if you want reproducible builds.
 | Herdr | install script | `/usr/local/bin/herdr` | re-run installer | `.config/herdr/` |
 | Pi | npm global (tolerated, `--ignore-scripts`) | `/usr/local/bin/pi` | `npm update -g` | `.pi/` |
 | Hermes Agent | install script | `/usr/local/bin/hermes` | re-run installer | `.hermes/` |
-| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 8) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
+| Hermes WebUI | git clone + venv (tolerated) | `/opt/hermes-webui` | `git pull` + pip (update step 7) | state under `.hermes/webui/`; boot binding + password in `/opt/hermes-webui/.env`, rewritten by the entrypoint each boot |
 | Bun | npm global | `/usr/local/bin/bun` | `bun upgrade` | — |
 | Node.js | NodeSource apt | `/usr/bin/node` | apt upgrade | — |
 | GitHub CLI | apt (official repo) | `/usr/bin/gh` | apt upgrade | — |

@@ -6,7 +6,7 @@ echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
 
-TOTAL=10
+TOTAL=9
 
 # Every tool this image installs lives in exactly one place: /usr/local/bin for the
 # binary, /usr/local/lib/<tool> for a bundle. Both are image-managed, and both are owned
@@ -37,20 +37,17 @@ publish_from_installer() {
   rm -rf "$scratch"
 }
 
-echo "1/$TOTAL Creating automatic safety backup..."
-backup "auto-before-update"
-echo ""
-echo "2/$TOTAL Updating system packages (APT)..."
+echo "1/$TOTAL Updating system packages (APT)..."
 # Covers the base packages plus everything installed from a vendor APT repo: gh, docker
 # (engine, CLI, buildx, compose) and the NodeSource nodejs — which stays on its pinned
 # major; a major bump is a rebuild with --build-arg NODE_MAJOR=.
 sudo apt-get update && sudo apt-get upgrade -y
 echo ""
-echo "3/$TOTAL Cleaning up old, unnecessary files..."
+echo "2/$TOTAL Cleaning up old, unnecessary files..."
 # Autoremove orphaned packages and clear APT package download caches to save container space
 sudo apt-get autoremove -y && sudo apt-get clean
 echo ""
-echo "4/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, language servers)..."
+echo "3/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, language servers)..."
 # Reinstall at @latest rather than `npm update -g`: for globals npm stays within the
 # semver range the package was installed under, so it never crosses a major — and these
 # CLIs (Claude Code especially) move majors. This is also the *only* update path for
@@ -79,18 +76,18 @@ sudo npm install -g --no-fund --no-audit codeburn@latest || echo "    codeburn u
 sudo npm install -g --no-fund --no-audit --ignore-scripts @earendil-works/pi-coding-agent@latest \
   || echo "    Pi update skipped"
 echo ""
-echo "5/$TOTAL Updating Herdr..."
+echo "4/$TOTAL Updating Herdr..."
 # Installs straight to /usr/local/bin via HERDR_INSTALL_DIR (matches the Dockerfile) —
 # the old install-to-~/.local/bin-then-cp dance could silently no-op the cp and leave
 # the running binary un-updated with no error.
 (curl -fsSL https://herdr.dev/install.sh | sudo env HERDR_INSTALL_DIR=/usr/local/bin sh) || true
 echo ""
-echo "6/$TOTAL Updating Antigravity CLI (agy)..."
+echo "5/$TOTAL Updating Antigravity CLI (agy)..."
 # No install-dir env var upstream — it hardcodes ~/.local/bin, so it runs against a
 # throwaway HOME.
 publish_from_installer agy https://antigravity.google/cli/install.sh
 echo ""
-echo "7/$TOTAL Updating Hermes Agent..."
+echo "6/$TOTAL Updating Hermes Agent..."
 # The agent's own updater: a git pull + dependency sync inside its install tree, run as
 # the invoking user. /usr/local/lib/hermes-agent and uv's shared cache are chowned to
 # that user at build time, so no ownership work is needed here.
@@ -102,14 +99,14 @@ echo "7/$TOTAL Updating Hermes Agent..."
 # which is the thing this script exists to avoid.
 /usr/local/bin/hermes update --yes || echo "    hermes update skipped"
 echo ""
-echo "8/$TOTAL Updating Hermes WebUI..."
+echo "7/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
 # /opt/hermes-webui is chowned to the sandbox user at build time, so this needs no sudo.
 (git -C /opt/hermes-webui pull --ff-only && \
  /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
  /opt/hermes-webui/ctl.sh restart) || true
 echo ""
-echo "9/$TOTAL Updating docling and the pdftotext bindings..."
+echo "8/$TOTAL Updating docling and the pdftotext bindings..."
 # System-Python installs (see the Dockerfile's step 7c for why they are not in a venv),
 # so this needs sudo and PEP 668's --break-system-packages, same as the build.
 #
@@ -128,7 +125,7 @@ sudo env DOCLING_TORCH_INDEX="${DOCLING_TORCH_INDEX-https://download.pytorch.org
            docling pdftotext' \
   || echo "    docling / pdftotext update skipped"
 echo ""
-echo "10/$TOTAL Updating the dotfiles tool..."
+echo "9/$TOTAL Updating the dotfiles tool..."
 # A single self-contained script, installed in the image by Docker's ADD from this same
 # URL. Downloaded to a temp file and smoke-tested before being swapped in, so a truncated
 # or unavailable download cannot leave the box without a working `dotfiles` — the tool
@@ -177,7 +174,6 @@ fi
 echo ""
 echo "=============================================="
 echo "System packages updated and container pruned successfully."
-echo "Saved safety backup with label: auto-before-update"
 echo "Note: tool updates land in image-managed paths and reset on 'docker compose down/up'."
 echo "      Rebuild the image (docker compose up -d --build) to make them durable."
 echo "      The tailscale sidecars are separate containers — update them from the"
