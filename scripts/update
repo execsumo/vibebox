@@ -1,12 +1,24 @@
 #!/bin/bash
-# Update every tool this image pre-installs, using each tool's own supported update
-# path. Runs as the sandbox user; `sudo` is passwordless here and is used only where
-# the target is genuinely root-owned (APT, the npm global prefix, /opt bundles).
+# Update the tools this image pre-installs, using each tool's own supported update path.
+# Runs as the sandbox user; `sudo` is passwordless here and is used only where the target
+# is genuinely root-owned (the npm global prefix, the system Python).
+#
+# This is the *fast, in-place* update path, safe to run mid-session: nothing here restarts
+# a process you might be using, and binaries are swapped atomically so a running tool is
+# never disturbed. It deliberately does NOT touch APT — a system upgrade is slow, can
+# restart services, and its results reset on the next `docker compose down/up` anyway.
+# APT and the base image are the host-side `update-image` script's job.
 echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
 
-TOTAL=9
+TOTAL=7
+
+# Set when a step finds work that would restart something the user may be using. Nothing
+# here acts on its own; both are reported again in the closing summary so the notice
+# cannot scroll past, and the user picks the moment.
+WEBUI_RESTART_NEEDED=0
+HERMES_UPDATE_AVAILABLE=0
 
 # Every tool this image installs lives in exactly one place: /usr/local/bin for the
 # binary, /usr/local/lib/<tool> for a bundle. Both are image-managed, and both are owned
@@ -16,43 +28,68 @@ TOTAL=9
 # PATH — so a binary that lands there outlives every rebuild and permanently shadows the
 # copy this script maintains, with no error anywhere to say so.
 #
-# Upstream installers come in two shapes, and each gets the treatment that keeps the rule
-# true by construction:
+# `publish` below is the single path by which a downloaded binary reaches /usr/local/bin.
+# It exists for two reasons:
 #
-#   * takes a destination env var  → point it straight at /usr/local/bin (herdr, hermes).
-#   * hardcodes ~/.local/bin       → publish_from_installer below.
-publish_from_installer() {
-  local name="$1" url="$2" scratch rc=0
-  # A throwaway HOME. The installer writes its ~/.local/bin into a temp dir that is
-  # deleted on the way out, so only the finished binary survives, in the one place this
-  # image manages. Prevention, not detection: there is no state left to go stale.
+#   1. Containment. Upstream installers disagree about where they write — some take a
+#      destination env var, some hardcode ~/.local/bin — so each one runs against a
+#      throwaway HOME and a scratch directory that is deleted on the way out. Only the
+#      finished binary survives, in the one place this image manages. Prevention, not
+#      detection: there is no state left to go stale.
+#
+#   2. Atomicity. The final step is a same-directory `mv`, which is a rename(2) and
+#      therefore atomic. A tool that is *running* while this script executes keeps the
+#      old inode and finishes normally; the next launch picks up the new version. Writing
+#      through the existing file instead (`install` or `cp` straight onto the target, as
+#      this script used to do) risks ETXTBSY or, worse, a half-written binary — which is
+#      exactly the failure mode that makes an update unsafe to run while you are working.
+#
+# Usage: publish <name> '<producer command>'
+# The producer runs with HOME and $PUBLISH_DIR both pointing at the scratch directory, and
+# is expected to leave an executable at $PUBLISH_DIR/<name> or $PUBLISH_DIR/.local/bin/<name>.
+publish() {
+  local name="$1" producer="$2" scratch bin tmp rc=0
   scratch="$(mktemp -d)"
-  HOME="$scratch" bash -c "curl -fsSL '$url' | bash" >/dev/null 2>&1 || rc=$?
-  if [ "$rc" -eq 0 ] && [ -x "$scratch/.local/bin/$name" ]; then
+  PUBLISH_DIR="$scratch" HOME="$scratch" bash -c "$producer" >/dev/null 2>&1 || rc=$?
+
+  # Both layouts, so a call site never has to shuffle files just to match this helper.
+  if   [ -f "$scratch/$name" ];             then bin="$scratch/$name"
+  elif [ -f "$scratch/.local/bin/$name" ];  then bin="$scratch/.local/bin/$name"
+  else bin=""
+  fi
+  # A plain `curl -o` download has no execute bit; installers set their own.
+  [ -n "$bin" ] && chmod 755 "$bin" 2>/dev/null
+
+  # Smoke-test before swapping: a truncated or unavailable download must not be able to
+  # leave the box without a working copy of a tool it depends on (`dotfiles`, which
+  # `onboard` needs, most of all). Two spellings because upstreams disagree.
+  if [ "$rc" -eq 0 ] && [ -n "$bin" ] \
+     && { "$bin" --version >/dev/null 2>&1 || "$bin" version >/dev/null 2>&1; }; then
     # No sudo: /usr/local/bin is chowned to the sandbox user in the Dockerfile.
-    install -m 755 "$scratch/.local/bin/$name" "/usr/local/bin/$name"
+    tmp="/usr/local/bin/.$name.$$.new"
+    if install -m 755 "$bin" "$tmp" 2>/dev/null && mv -f "$tmp" "/usr/local/bin/$name"; then
+      :
+    else
+      rm -f "$tmp"
+      echo "    $name update skipped"
+    fi
   else
     echo "    $name update skipped"
   fi
   rm -rf "$scratch"
 }
 
-echo "1/$TOTAL Updating system packages (APT)..."
-# Covers the base packages plus everything installed from a vendor APT repo: gh, docker
-# (engine, CLI, buildx, compose) and the NodeSource nodejs — which stays on its pinned
-# major; a major bump is a rebuild with --build-arg NODE_MAJOR=.
-sudo apt-get update && sudo apt-get upgrade -y
-echo ""
-echo "2/$TOTAL Cleaning up old, unnecessary files..."
-# Autoremove orphaned packages and clear APT package download caches to save container space
-sudo apt-get autoremove -y && sudo apt-get clean
-echo ""
-echo "3/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, language servers)..."
+echo "1/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, language servers)..."
 # Reinstall at @latest rather than `npm update -g`: for globals npm stays within the
 # semver range the package was installed under, so it never crosses a major — and these
-# CLIs (Claude Code especially) move majors. This is also the *only* update path for
-# Claude Code and Codex, since npm's prefix here is /usr and root-owned, so the image
+# CLIs (Claude Code especially) move majors. This is also the *only* in-place update path
+# for Claude Code and Codex, since npm's prefix here is /usr and root-owned, so the image
 # disables their in-process auto-updaters (see DISABLE_AUTOUPDATER in the Dockerfile).
+#
+# Safe to run while an agent is open: npm replaces files under /usr/lib/node_modules, and
+# a running node process keeps the inodes it has already loaded. The new version applies
+# on the next launch. (A lazy require() after the swap reads the new tree, so restart the
+# agent at a natural break rather than mid-task.)
 #
 # Bun is in this list because that is how the image installs it — an npm global, not a
 # standalone ~/.bun install. `bun upgrade` would replace the binary underneath npm and
@@ -76,37 +113,66 @@ sudo npm install -g --no-fund --no-audit codeburn@latest || echo "    codeburn u
 sudo npm install -g --no-fund --no-audit --ignore-scripts @earendil-works/pi-coding-agent@latest \
   || echo "    Pi update skipped"
 echo ""
-echo "4/$TOTAL Updating Herdr..."
-# Installs straight to /usr/local/bin via HERDR_INSTALL_DIR (matches the Dockerfile) —
-# the old install-to-~/.local/bin-then-cp dance could silently no-op the cp and leave
-# the running binary un-updated with no error.
-(curl -fsSL https://herdr.dev/install.sh | sudo env HERDR_INSTALL_DIR=/usr/local/bin sh) || true
+echo "2/$TOTAL Updating Herdr..."
+# HERDR_INSTALL_DIR points the installer at the scratch directory rather than straight at
+# /usr/local/bin, so herdr gets the same smoke test and atomic swap as everything else.
+publish herdr 'curl -fsSL https://herdr.dev/install.sh | env HERDR_INSTALL_DIR="$PUBLISH_DIR" sh'
 echo ""
-echo "5/$TOTAL Updating Antigravity CLI (agy)..."
-# No install-dir env var upstream — it hardcodes ~/.local/bin, so it runs against a
-# throwaway HOME.
-publish_from_installer agy https://antigravity.google/cli/install.sh
+echo "3/$TOTAL Updating Antigravity CLI (agy)..."
+# No install-dir env var upstream — it hardcodes ~/.local/bin, which the throwaway HOME
+# redirects into the scratch directory.
+publish agy 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
 echo ""
-echo "6/$TOTAL Updating Hermes Agent..."
-# The agent's own updater: a git pull + dependency sync inside its install tree, run as
-# the invoking user. /usr/local/lib/hermes-agent and uv's shared cache are chowned to
-# that user at build time, so no ownership work is needed here.
+echo "4/$TOTAL Checking the Hermes Agent..."
+# CHECK ONLY — deliberately does not apply. `hermes update` drains and restarts the
+# gateway as part of its run ("draining gateway PID ... / Restarting manual gateway
+# profile(s)"), which is exactly the kind of surprise this script exists to avoid: a
+# gateway that has been serving for hours goes away mid-session with no warning. So the
+# agent gets the same treatment as the WebUI below — report, and leave the timing to the
+# user. `--check` is upstream's own supported "is there anything?" path.
 #
 # Absolute path, not PATH: `hermes` is a launcher that hard-codes the tree it belongs to,
 # so this must name the tree the image owns rather than whichever launcher happens to
-# resolve first. If it fails, the closing verification reports it and the fix is a
-# rebuild — a reinstall path here would be a second way to produce an install tree,
-# which is the thing this script exists to avoid.
-/usr/local/bin/hermes update --yes || echo "    hermes update skipped"
+# resolve first.
+#
+# Output-matched rather than exit-code-matched: `--check` exits 0 whether or not an
+# update exists, so "Already up to date." is the only reliable signal. A false positive
+# here costs a needless notice; a false negative costs nothing but a later check.
+HERMES_CHECK="$(/usr/local/bin/hermes update --check 2>&1)"
+if [ $? -ne 0 ]; then
+  echo "    hermes check skipped"
+elif printf '%s' "$HERMES_CHECK" | grep -qi 'already up to date'; then
+  echo "    already up to date"
+else
+  HERMES_UPDATE_AVAILABLE=1
+  echo "    update available — apply when convenient:  hermes update --yes"
+  echo "    (this drains and restarts the gateway, so pick your moment)"
+fi
 echo ""
-echo "7/$TOTAL Updating Hermes WebUI..."
+echo "5/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
 # /opt/hermes-webui is chowned to the sandbox user at build time, so this needs no sudo.
-(git -C /opt/hermes-webui pull --ff-only && \
- /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt && \
- /opt/hermes-webui/ctl.sh restart) || true
+#
+# Deliberately does NOT restart the service. This script is meant to be safe to run while
+# you are working, and the webui restart was the one step that would drop a session out
+# from under you. The dependency sync only runs when the pull actually moved HEAD, so an
+# up-to-date box costs nothing here.
+WEBUI_HEAD_BEFORE="$(git -C /opt/hermes-webui rev-parse HEAD 2>/dev/null || echo none)"
+if git -C /opt/hermes-webui pull --ff-only >/dev/null 2>&1; then
+  WEBUI_HEAD_AFTER="$(git -C /opt/hermes-webui rev-parse HEAD 2>/dev/null || echo none)"
+  if [ "$WEBUI_HEAD_BEFORE" != "$WEBUI_HEAD_AFTER" ]; then
+    /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt \
+      || echo "    hermes-webui dependency sync skipped"
+    WEBUI_RESTART_NEEDED=1
+    echo "    updated — restart when convenient:  hermes-webui restart"
+  else
+    echo "    already up to date"
+  fi
+else
+  echo "    hermes-webui update skipped"
+fi
 echo ""
-echo "8/$TOTAL Updating docling and the pdftotext bindings..."
+echo "6/$TOTAL Updating docling and the pdftotext bindings..."
 # System-Python installs (see the Dockerfile's step 7c for why they are not in a venv),
 # so this needs sudo and PEP 668's --break-system-packages, same as the build.
 #
@@ -125,35 +191,26 @@ sudo env DOCLING_TORCH_INDEX="${DOCLING_TORCH_INDEX-https://download.pytorch.org
            docling pdftotext' \
   || echo "    docling / pdftotext update skipped"
 echo ""
-echo "9/$TOTAL Updating the dotfiles tool..."
+echo "7/$TOTAL Updating the dotfiles tool..."
 # A single self-contained script, installed in the image by Docker's ADD from this same
-# URL. Downloaded to a temp file and smoke-tested before being swapped in, so a truncated
-# or unavailable download cannot leave the box without a working `dotfiles` — the tool
-# `onboard` depends on.
+# URL — so a plain fetch into the scratch directory is the whole "installer" here.
 DOTTER_REPO="${DOTTER_REPO:-execsumo/dotter}"
 DOTTER_REF="${DOTTER_REF:-main}"
-DOTFILES_TMP="$(mktemp)"
-if curl -fsSL "https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles" \
-     -o "$DOTFILES_TMP" \
-   && chmod 755 "$DOTFILES_TMP" \
-   && "$DOTFILES_TMP" version >/dev/null 2>&1; then
-  sudo cp -f "$DOTFILES_TMP" /usr/local/bin/dotfiles && sudo chmod 755 /usr/local/bin/dotfiles
-else
-  echo "    dotfiles update skipped"
-fi
-rm -f "$DOTFILES_TMP"
+export DOTTER_REPO DOTTER_REF
+publish dotfiles 'curl -fsSL "https://raw.githubusercontent.com/${DOTTER_REPO}/${DOTTER_REF}/bin/dotfiles" -o "$PUBLISH_DIR/dotfiles"'
 echo ""
-# Every step above is tolerated (`|| true`) so one unreachable installer cannot stop the
-# rest of the update — which also means a failure scrolls past. Close with the same check
-# the Dockerfile's step 8 runs, so the state of the toolchain after an update is stated
-# rather than assumed. `--version` rather than `command -v`: a half-updated launcher
-# still exists and is still executable.
+# Every step above is tolerated so one unreachable installer cannot stop the rest of the
+# update — which also means a failure scrolls past. Close with the same check the
+# Dockerfile's step 8 runs, so the state of the toolchain after an update is stated rather
+# than assumed. `--version` rather than `command -v`: a half-updated launcher still exists
+# and is still executable.
 echo "Verifying the toolchain..."
+TOOLCHAIN_OK=1
 for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles docling; do
   if ! command -v "$t" >/dev/null 2>&1; then
-    printf '  %-12s MISSING\n' "$t"
+    printf '  %-12s MISSING\n' "$t"; TOOLCHAIN_OK=0
   elif ! "$t" --version >/dev/null 2>&1; then
-    printf '  %-12s BROKEN (installed, but fails to run)\n' "$t"
+    printf '  %-12s BROKEN (installed, but fails to run)\n' "$t"; TOOLCHAIN_OK=0
   else
     printf '  %-12s ok\n' "$t"
   fi
@@ -164,18 +221,34 @@ done
 if python3 -c 'import pdftotext' >/dev/null 2>&1; then
   printf '  %-12s ok\n' "pdftotext"
 else
-  printf '  %-12s MISSING\n' "pdftotext"
+  printf '  %-12s MISSING\n' "pdftotext"; TOOLCHAIN_OK=0
 fi
 if [ -x /opt/hermes-webui/ctl.sh ]; then
   printf '  %-12s ok\n' "hermes-webui"
 else
-  printf '  %-12s MISSING\n' "hermes-webui"
+  printf '  %-12s MISSING\n' "hermes-webui"; TOOLCHAIN_OK=0
 fi
 echo ""
 echo "=============================================="
-echo "System packages updated and container pruned successfully."
-echo "Note: tool updates land in image-managed paths and reset on 'docker compose down/up'."
-echo "      Rebuild the image (docker compose up -d --build) to make them durable."
-echo "      The tailscale sidecars are separate containers — update them from the"
-echo "      host with 'docker compose pull && docker compose up -d'."
+if [ "$TOOLCHAIN_OK" -eq 1 ]; then
+  echo "Tools updated successfully."
+else
+  echo "Tools updated, but the checks above found problems."
+fi
+if [ "$WEBUI_RESTART_NEEDED" -eq 1 ] || [ "$HERMES_UPDATE_AVAILABLE" -eq 1 ]; then
+  echo ""
+  echo "Pending, deliberately left for you to time — this run restarted nothing:"
+  [ "$WEBUI_RESTART_NEEDED" -eq 1 ] && \
+    echo "  * Hermes WebUI updated, not restarted:  hermes-webui restart"
+  [ "$HERMES_UPDATE_AVAILABLE" -eq 1 ] && \
+    echo "  * Hermes Agent update available:        hermes update --yes"
+fi
+echo ""
+echo "This is the in-place path: it does not touch APT or the base image, and"
+echo "everything it changed resets on the next 'docker compose down/up'."
+echo "For a durable refresh that also picks up APT and base-image updates, run"
+echo "update-image.ps1 (Windows) or ./update-image.sh (Linux/macOS) on the host."
 echo "=============================================="
+# Non-zero on a broken toolchain: a MISSING/BROKEN line that only prints is a line that
+# scrolls past, and this makes the script usable from a wrapper or a scheduled job.
+[ "$TOOLCHAIN_OK" -eq 1 ] || exit 1

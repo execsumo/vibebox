@@ -317,11 +317,84 @@ The host identity is **not** restored unless you ask for it: by default the sand
 
 ### Update tools
 
+There are two update paths, and they are deliberately different jobs.
+
+**Fast, in-place, safe to run mid-session** — inside the box:
+
 ```bash
 update
 ```
 
-Upgrades every tool the image pre-installs — APT packages, all npm globals (including Bun, which is installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, the Hermes WebUI, and the `dotfiles` tool — each through its own supported update path. It does not take a backup first — run `backup` yourself beforehand if you want a safety snapshot — and prints an `ok` / `MISSING` / `BROKEN` line per tool at the end, so a step that failed and scrolled past is still visible. Note: tool updates land in image-managed paths and reset on `docker compose down/up`. Rebuild the image (`docker compose up -d --build`) to make them durable. The tailscale sidecars are separate containers — update them from the host with `docker compose pull && docker compose up -d`.
+Upgrades the tools the image pre-installs: all npm globals (including Bun, which is
+installed as one), Herdr, Antigravity (`agy`), the Hermes WebUI, docling and the
+`pdftotext` bindings, and the `dotfiles` tool — each through its own supported update
+path. It takes seconds to a couple of minutes and **restarts nothing**:
+
+- Binaries are swapped **atomically** (a same-directory `mv`), so a tool that is running
+  while `update` executes keeps working and picks up the new version on its next launch.
+- Each downloaded binary is smoke-tested before it replaces the working copy, so a
+  truncated or unavailable download cannot leave the box without a functioning tool. A
+  tool that has gone missing entirely is reinstalled on the next run.
+
+**Two things are reported rather than applied**, because applying them restarts a service
+you may be using. `update` names both at the end of the run and leaves the timing to you:
+
+| Pending | Apply with |
+|---|---|
+| Hermes WebUI code updated, service still on the old version | `hermes-webui restart` |
+| Hermes Agent update available (`update` only runs `--check`) | `hermes update --yes` |
+
+The agent is check-only for a concrete reason: `hermes update` drains and restarts the
+gateway as part of its run, which on a working box means a gateway that has been serving
+for hours disappears mid-session with no warning.
+
+It **does not touch APT or the base image** — that is slow, can restart services, and its
+results would reset on the next `down`/`up` anyway. It does not take a backup first either;
+run `backup` yourself beforehand if you want a safety snapshot. A per-tool
+`ok` / `MISSING` / `BROKEN` line prints at the end and the command **exits non-zero** if any
+check failed, so a step that failed and scrolled past is still visible.
+
+Everything `update` changes lives in image-managed paths and **resets on
+`docker compose down/up`**. That is fine — the image catches up on its own schedule:
+
+**Durable, once in a while** — from the host:
+
+```bash
+.\update-image.ps1
+```
+
+```bash
+./update-image.sh
+```
+
+Pulls the tailscale sidecar images, rebuilds the sandbox image with `--no-cache --pull`
+(so APT, npm, and the base image genuinely refresh rather than hitting Docker's layer
+cache), reports whether the result differs from the image in use, and **then asks** before
+applying it. The build touches nothing that is running, so it is safe to leave going while
+you work; it is the apply step that recreates the container and ends every SSH session,
+tmux window, and running agent. Expect roughly 10–15 minutes, most of it recompiling
+docling's `torch` dependency.
+
+If the build fails, the script stops before applying anything and the running sandbox is
+untouched — the Dockerfile verifies the toolchain as its last step, so an image that would
+give you a broken `claude` never becomes a running container.
+
+| Flag | Effect |
+|---|---|
+| `-Yes` / `--yes` | Apply without asking (unattended or scheduled runs) |
+| `-BuildOnly` / `--build-only` | Pull and rebuild, never apply — you run `docker compose up -d` when convenient |
+
+Running on GPU? Rather than passing `-f` flags, set `COMPOSE_FILE` in your `.env` —
+`docker compose` reads it natively, so the overlay applies to this script and to
+`setup-sandbox` / `restore` without any extra flags. **The separator is OS-dependent:**
+
+```bash
+# Windows host
+COMPOSE_FILE=docker-compose.yml;docker-compose.gpu.yml
+
+# Linux / macOS host
+COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+```
 
 **Claude Code and Codex do not self-update here — `update` is their update path.** The
 NodeSource `nodejs` package sets npm's prefix to `/usr`, so every npm global lives in
@@ -374,7 +447,7 @@ It shells out to `docker`, so it depends on that same socket being mounted.
 - Tailscale auth/identity (`<SANDBOX_NAME>-tailscale-state` volume)
 - `authorized_keys` and `backups/` live on the host as bind mounts, outside the container lifecycle entirely
 
-Everything else comes from the image and is disposable. Anything you install with `apt` or `sudo cp` works for the life of the container but is **not** persisted — to make a tool or package durable, add it to the Dockerfile and rebuild. The in-container `update` command upgrades tools in place, but those changes reset on the next `down`/`up`; treat `docker compose up -d --build` as the durable update path.
+Everything else comes from the image and is disposable. Anything you install with `apt` or `sudo cp` works for the life of the container but is **not** persisted — to make a tool or package durable, add it to the Dockerfile and rebuild. The in-container `update` command upgrades tools in place, but those changes reset on the next `down`/`up`; treat the host-side `update-image.ps1` / `./update-image.sh` as the durable update path (see [Update tools](#update-tools)).
 
 SSH host keys are generated once on first boot into a dedicated volume (`/opt/vibebox/ssh`), so rebuilds — and restores — keep the same identity: no "host key changed" warnings. Keeping them off the home volume is what makes them survive a restore.
 
@@ -538,6 +611,10 @@ docker compose up -d
 # Start with rebuild
 docker compose up -d --build
 
+# Full refresh: pull sidecars, rebuild from scratch, ask before restarting
+.\update-image.ps1          # Windows host
+./update-image.sh           # Linux / macOS host
+
 # Start in CUDA/GPU mode
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 
@@ -577,6 +654,8 @@ hermes-webui status|logs|restart|stop|start
 (`hermes-webui` is a wrapper on `$PATH`; `/opt/hermes-webui/ctl.sh` works too.)
 
 `start` and `restart` need no arguments: the entrypoint records the boot host/port and password in `/opt/hermes-webui/.env`, so a hand-restarted webui comes back on the same tailnet-facing bind with authentication intact (see [API Keys](#api-keys)).
+
+**`update` never restarts the webui.** It pulls the new code and syncs dependencies, then tells you a restart is pending and leaves the timing to you — so an update run cannot drop your session. Until you run `hermes-webui restart`, the old version keeps serving.
 
 Logs are at `~/.hermes/webui.log`.
 
