@@ -4,6 +4,40 @@
 # "host key changed" warnings), then hands off to the given command (sshd).
 set -e
 
+# /etc/hosts here is not this container's own file. `network_mode: service:tailscale`
+# makes Docker reuse the *tailscale* container's hosts file: the daemon bind-mounts
+# /var/lib/docker/containers/<tailscale-id>/hosts onto /etc/hosts here, and rebuilds
+# that file from scratch every time that container starts. This container never
+# generates one of its own — it only inherits the path — so a tailscale restart or
+# crash-loop (the failure mode docker-compose.yml already documents around
+# TS_AUTHKEY) can leave the sandbox holding a live mount onto a truncated file, and
+# nothing here ever puts the contents back.
+#
+# An empty hosts file is not a cosmetic problem: nsswitch is `files dns`, so with no
+# `files` entry `localhost` falls through to Docker's embedded resolver at
+# 127.0.0.11, which does not serve it. Everything that binds or dials localhost then
+# dies at startup — `agy` exits immediately with "listen tcp: lookup localhost on
+# 127.0.0.11:53: no such host", and hermes-webui and any local dev server go the same
+# way. Repair it on every boot rather than trusting a file this container does not own.
+#
+# Keyed on whether localhost actually resolves, not on the file's contents, so a hosts
+# file the daemon wrote correctly (the normal case) is left byte-for-byte alone.
+if ! getent hosts localhost >/dev/null 2>&1; then
+  echo "NOTE: localhost does not resolve; restoring the standard loopback entries in /etc/hosts."
+  # Appended, not overwritten: when the file is merely missing these lines it still
+  # carries the daemon's entry for this container's own hostname, and nothing else
+  # would recreate that.
+  if {
+       printf '127.0.0.1\tlocalhost\n'
+       printf '::1\tlocalhost ip6-localhost ip6-loopback\n'
+     } >> /etc/hosts 2>/dev/null; then
+    getent hosts localhost >/dev/null 2>&1 \
+      || echo "WARNING: localhost still does not resolve after repairing /etc/hosts."
+  else
+    echo "WARNING: could not write /etc/hosts. Tools that bind localhost (agy, hermes-webui) will fail to start."
+  fi
+fi
+
 # Resolve the sandbox user's home (UID 1000) regardless of the configured username.
 SANDBOX_HOME="$(getent passwd 1000 | cut -d: -f6)"
 VIBEBOX_DIR="$SANDBOX_HOME/.vibebox"

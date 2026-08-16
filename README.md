@@ -361,6 +361,17 @@ tailscale ip -4
 
 It shells out to `docker`, so it depends on that same socket being mounted.
 
+Sharing that namespace also means `/etc/hosts` belongs to the tailscale container, not
+to the sandbox — Docker rebuilds it whenever *that* container starts, so a tailscale
+restart can empty it underneath a running sandbox. An empty hosts file stops `localhost`
+resolving (`nsswitch` is `files dns`, and Docker's `127.0.0.11` resolver does not serve
+`localhost`), which breaks every tool that binds or dials it — `agy` and the Hermes
+WebUI included. The entrypoint restores the standard loopback entries at boot, and
+`getent hosts localhost` is part of the sandbox healthcheck, so if it happens mid-run
+`docker compose ps` reports the container unhealthy instead of leaving you debugging
+what looks like a broken tool. Restarting the sandbox (`docker compose up -d sandbox`)
+re-runs the repair.
+
 ---
 
 ## Reference

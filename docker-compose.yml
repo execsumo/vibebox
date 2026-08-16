@@ -130,8 +130,14 @@ services:
       - ./backups/${SANDBOX_NAME:-vibebox}:/backups
       # Mount the host Docker socket to enable Docker-out-of-Docker CLI access from inside the sandbox
       - /var/run/docker.sock:/var/run/docker.sock
+    # `getent hosts localhost` is in here because /etc/hosts is not this container's
+    # file — it is the tailscale container's, shared in by network_mode below and
+    # rebuilt whenever *that* container starts. The entrypoint repairs it at boot, but
+    # a tailscale restart can empty it again under a running sandbox, and the symptom
+    # (agy and hermes-webui failing to bind localhost) otherwise looks like a broken
+    # tool rather than broken name resolution. Failing the healthcheck names it.
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -x sshd >/dev/null && test -s /home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys"]
+      test: ["CMD-SHELL", "pgrep -x sshd >/dev/null && test -s /home/${SANDBOX_USERNAME:-dev}/.ssh/authorized_keys && getent hosts localhost >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
