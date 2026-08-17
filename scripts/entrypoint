@@ -209,4 +209,16 @@ if [ -x /opt/hermes-webui/ctl.sh ]; then
     /opt/hermes-webui/ctl.sh start || echo "hermes-webui failed to start (non-fatal)"
 fi
 
+# Start the Hermes Agent messaging gateway if it's installed. `hermes gateway
+# start` wants systemd, which this container doesn't have (and WSL's own
+# systemd support is unreliable enough that upstream tells WSL users to skip it
+# too) — hermes-gateway (scripts/hermes-gateway) supervises `hermes gateway run`
+# instead. Non-fatal and safe to attempt unconditionally: an unconfigured
+# gateway just exits immediately and the loop in hermes-gateway stops retrying.
+if command -v hermes >/dev/null 2>&1; then
+  SANDBOX_USER="$(getent passwd 1000 | cut -d: -f1)"
+  runuser -u "$SANDBOX_USER" -- env HOME="$SANDBOX_HOME" \
+    /usr/local/bin/hermes-gateway start || echo "hermes gateway failed to start (non-fatal)"
+fi
+
 exec "$@"

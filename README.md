@@ -595,6 +595,29 @@ Logs are at `~/.hermes/webui.log`.
 
 ---
 
+## Hermes Gateway
+
+The Hermes Agent's messaging gateway (`hermes gateway ...`) normally runs as a systemd
+(Linux) or launchd (macOS) service. This container has no init system, so upstream's
+own `hermes gateway start` fails with `WSL detected but systemd is not available`
+(WSL's systemd support is unreliable enough that upstream tells WSL users to skip
+`start` entirely, same as here).
+
+Vibebox works around this the same way it does for the webui: `hermes-gateway`
+(`scripts/hermes-gateway`) supervises `hermes gateway run --external-supervisor` as a
+background process, and the entrypoint starts it automatically on boot if `hermes` is
+installed and configured. Manage it from inside the sandbox with:
+
+```bash
+hermes-gateway status|logs|restart|stop|start
+```
+
+Logs are at `~/.hermes/logs/gateway.log`. If the gateway isn't configured yet, run
+`hermes gateway setup` first — an unconfigured gateway just exits immediately and
+`hermes-gateway` won't keep retrying until you start it again.
+
+---
+
 ## Dotfiles
 
 Dotfiles are **not** managed by vibebox. They are handled by
