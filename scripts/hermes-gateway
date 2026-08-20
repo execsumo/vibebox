@@ -1,0 +1,75 @@
+#!/bin/bash
+# Supervises the Hermes Agent messaging gateway in the background.
+#
+# `hermes gateway start` hooks into systemd (Linux) / launchd (macOS), and WSL's
+# systemd support is unreliable enough that upstream itself tells WSL users to run
+# `hermes gateway run` in the foreground instead (tmux, nohup, ...). This
+# container has no init system at all — see scripts/entrypoint's "no daemon
+# inside the container" note for hermes-webui, the same reasoning applies here.
+#
+# `hermes gateway run --external-supervisor` exists for exactly this case: the
+# gateway runs in the foreground and exits 75 (instead of re-execing itself)
+# whenever it wants to restart, trusting a wrapper to relaunch it. This script is
+# that wrapper. Mirrors hermes-webui's ctl.sh interface (start|stop|restart|
+# status|logs) so both services are driven the same way from inside the box.
+set -e
+
+HERMES_DIR="${HOME}/.hermes"
+LOGFILE="$HERMES_DIR/logs/gateway.log"
+PIDFILE="$HERMES_DIR/gateway-supervisor.pid"
+mkdir -p "$(dirname "$LOGFILE")"
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+case "${1:-start}" in
+  start)
+    if is_running; then
+      echo "hermes gateway already running (pid $(cat "$PIDFILE"))"
+      exit 0
+    fi
+    # setsid makes the supervisor its own session/process-group leader, so `stop`
+    # below can kill it and the `hermes gateway run` child it spawns in one shot
+    # via the negative (group) pid — a plain `kill $pid` would leave the child
+    # running as an orphan.
+    setsid env LOGFILE="$LOGFILE" bash -c '
+      while true; do
+        hermes gateway run --external-supervisor >>"$LOGFILE" 2>&1
+        rc=$?
+        [ "$rc" -eq 75 ] || break
+      done
+    ' </dev/null >/dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    disown
+    echo "hermes gateway started (pid $(cat "$PIDFILE"))"
+    ;;
+  stop)
+    if is_running; then
+      pid="$(cat "$PIDFILE")"
+      kill -TERM -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      rm -f "$PIDFILE"
+      echo "hermes gateway stopped"
+    else
+      echo "hermes gateway not running"
+    fi
+    ;;
+  restart)
+    "$0" stop
+    "$0" start
+    ;;
+  status)
+    if is_running; then
+      echo "hermes gateway running (pid $(cat "$PIDFILE"))"
+    else
+      echo "hermes gateway not running"
+    fi
+    ;;
+  logs)
+    exec tail -n 200 -f "$LOGFILE"
+    ;;
+  *)
+    echo "usage: hermes-gateway {start|stop|restart|status|logs}" >&2
+    exit 1
+    ;;
+esac

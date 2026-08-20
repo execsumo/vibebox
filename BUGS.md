@@ -9,6 +9,35 @@ none of it has been exercised by a real build or boot. The first `docker compose
 
 ## Fixed Bugs
 
+### `agy` exited at startup: "lookup localhost on 127.0.0.11:53: no such host"
+
+**Root cause:** `/etc/hosts` in the sandbox was 0 bytes. It is not the sandbox's own
+file: `network_mode: service:tailscale` makes Docker reuse the *tailscale* container's
+hosts file, bind-mounting `/var/lib/docker/containers/<tailscale-id>/hosts` onto
+`/etc/hosts` here. The sandbox never generates one — it only inherits the path — and
+the daemon rebuilds that file from scratch every time the **tailscale** container
+starts. So a tailscale restart or crash-loop (the failure mode `docker-compose.yml`
+already documents around a missing `TS_AUTHKEY`, which also orphans the sandbox netns)
+leaves the sandbox holding a live mount onto a truncated file, and nothing in this repo
+ever put the contents back. With `nsswitch.conf` set to `files dns`, an empty hosts
+file sends `localhost` to Docker's embedded resolver at `127.0.0.11`, which does not
+serve it — hence the lookup failure.
+
+**Where it reproduced:** any tool that binds or dials `localhost`. `agy` 1.1.13 was
+just the loudest, exiting immediately at launch; hermes-webui and any local dev server
+fail the same way. The binary was fine throughout — `agy --version` worked, because
+nothing resolves a name.
+
+**Fix:** the entrypoint now guarantees the standard loopback entries on every boot,
+which is what makes it durable across `docker compose down/up` and image rebuilds. It
+is keyed on whether `localhost` actually resolves rather than on the file's contents,
+so a hosts file the daemon wrote correctly is left byte-for-byte alone, and the lines
+are appended rather than overwritten so the daemon's entry for the container's own
+hostname survives. `getent hosts localhost` also joined the sandbox healthcheck: the
+entrypoint cannot cover a tailscale restart emptying the file under an already-running
+sandbox, and without that check the symptom looks like a broken tool rather than broken
+name resolution.
+
 ### Claude Code: "Auto-update failed: no write permission to npm prefix · Run claude doctor"
 
 **Root cause:** npm's global prefix in this image is `/usr`, not `/usr/local` — the

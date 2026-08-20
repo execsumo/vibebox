@@ -313,6 +313,8 @@ This one covers home only — it runs as the sandbox user, which cannot read the
 
 A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them; package-manager caches — `.cache`, `.npm`, `go/pkg/mod`, `.cargo/registry`, `.cargo/git` — are excluded too, since they only re-populate on next use and can otherwise dwarf everything else in the archive), plus the SSH host keys under `ssh-identity/`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again.
 
+The host identity is **not** restored unless you ask for it: by default the sandbox keeps the identity it already has, so a restore never triggers "host key changed" warnings on your clients. Passing `--restore-identity` adopts the archived keys instead — expect each client to warn once. Archives made before this existed have no `ssh-identity/` entry; the flag then reports that and leaves the current identity alone. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`) are kept until you delete them.
+
 ### Clearing caches
 
 ```bash
@@ -331,8 +333,6 @@ rm -rf ~/.cargo/registry ~/.cargo/git
 ```
 
 These are exactly the caches backups already exclude (see above) — safe to run any time, since everything it touches re-populates on next use. It does not touch installed toolchains (`~/.rustup`, `~/.cargo/bin`) or your own virtualenvs (`~/.venvs`) — those aren't caches, and clearing them would break things rather than just cost a re-download.
-
-The host identity is **not** restored unless you ask for it: by default the sandbox keeps the identity it already has, so a restore never triggers "host key changed" warnings on your clients. Passing `--restore-identity` adopts the archived keys instead — expect each client to warn once. Archives made before this existed have no `ssh-identity/` entry; the flag then reports that and leaves the current identity alone. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`) are kept until you delete them.
 
 ### Update tools
 
@@ -452,6 +452,17 @@ tailscale ip -4
 ```
 
 It shells out to `docker`, so it depends on that same socket being mounted.
+
+Sharing that namespace also means `/etc/hosts` belongs to the tailscale container, not
+to the sandbox — Docker rebuilds it whenever *that* container starts, so a tailscale
+restart can empty it underneath a running sandbox. An empty hosts file stops `localhost`
+resolving (`nsswitch` is `files dns`, and Docker's `127.0.0.11` resolver does not serve
+`localhost`), which breaks every tool that binds or dials it — `agy` and the Hermes
+WebUI included. The entrypoint restores the standard loopback entries at boot, and
+`getent hosts localhost` is part of the sandbox healthcheck, so if it happens mid-run
+`docker compose ps` reports the container unhealthy instead of leaving you debugging
+what looks like a broken tool. Restarting the sandbox (`docker compose up -d sandbox`)
+re-runs the repair.
 
 ---
 
@@ -679,6 +690,29 @@ hermes-webui status|logs|restart|stop|start
 Logs are at `~/.hermes/webui.log`.
 
 **`onboard` pauses the webui.** If your dotfiles manifest tracks `.hermes`, `onboard` stops the webui while `dotfiles link` runs and starts it again afterwards. On a bind-mounted home (`SANDBOX_HOME_HOST_PATH`) the link *cannot* succeed otherwise — 9p refuses to rename a directory whose files the daemon holds open, reporting it as `Permission denied`.
+
+---
+
+## Hermes Gateway
+
+The Hermes Agent's messaging gateway (`hermes gateway ...`) normally runs as a systemd
+(Linux) or launchd (macOS) service. This container has no init system, so upstream's
+own `hermes gateway start` fails with `WSL detected but systemd is not available`
+(WSL's systemd support is unreliable enough that upstream tells WSL users to skip
+`start` entirely, same as here).
+
+Vibebox works around this the same way it does for the webui: `hermes-gateway`
+(`scripts/hermes-gateway`) supervises `hermes gateway run --external-supervisor` as a
+background process, and the entrypoint starts it automatically on boot if `hermes` is
+installed and configured. Manage it from inside the sandbox with:
+
+```bash
+hermes-gateway status|logs|restart|stop|start
+```
+
+Logs are at `~/.hermes/logs/gateway.log`. If the gateway isn't configured yet, run
+`hermes gateway setup` first — an unconfigured gateway just exits immediately and
+`hermes-gateway` won't keep retrying until you start it again.
 
 ---
 
