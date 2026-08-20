@@ -312,7 +312,7 @@ RUN mkdir -p /home/${USERNAME}/.ssh && \
 # Editing these is now editing a shell script — no Dockerfile heredocs.
 COPY scripts/ /usr/local/bin/
 # chmod explicitly — the execute bit does not survive a Windows/git checkout reliably.
-RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup \
+RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup /usr/local/bin/cleanup \
              /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/hermes-gateway /usr/local/bin/entrypoint /usr/local/bin/tailscale
 
 # The dotfiles tool is a standalone project; vibebox is just a consumer of it.

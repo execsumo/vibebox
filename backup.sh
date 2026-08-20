@@ -76,6 +76,11 @@ DOCKER_ARGS=(
 )
 TAR_ARGS=(
     "czf" "/backup/$Filename"
+    "--exclude=home/${Username}/.cache"
+    "--exclude=home/${Username}/.npm"
+    "--exclude=home/${Username}/go/pkg/mod"
+    "--exclude=home/${Username}/.cargo/registry"
+    "--exclude=home/${Username}/.cargo/git"
     "--exclude=home/${Username}/.vibebox"
     "-C" "/stage"
     "home/${Username}"
