@@ -32,11 +32,17 @@ echo "Saving $HOME to /backups/$FILENAME..."
 # live-system race (exit 1) from aborting the script; exit >1 is fatal.
 # .vibebox holds onboard marker files that should re-run after a restore, and SSH
 # host keys live on their own volume (not in home at all) — so it is excluded.
+# .cache, .npm, go/pkg/mod, and .cargo/registry|git are all package-manager
+# download/build caches that `cleanup` clears and that re-populate on next use —
+# same reasoning as .vibebox, just for disk instead of state.
 set +e
 tar \
   --warning=no-file-changed \
   --exclude="$HOME_REL/.cache" \
   --exclude="$HOME_REL/.npm" \
+  --exclude="$HOME_REL/go/pkg/mod" \
+  --exclude="$HOME_REL/.cargo/registry" \
+  --exclude="$HOME_REL/.cargo/git" \
   --exclude="$HOME_REL/.local/share/Trash" \
   --exclude="$HOME_REL/.vibebox" \
   -czf "/backups/$FILENAME" \

@@ -311,7 +311,26 @@ This one covers home only — it runs as the sandbox user, which cannot read the
 ./restore.sh before-refactor --restore-identity    # Linux/macOS
 ```
 
-A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them), plus the SSH host keys under `ssh-identity/`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again.
+A backup archives your home directory into a single `.tar.gz` (onboard markers under `~/.vibebox` are excluded so a restore re-runs them; package-manager caches — `.cache`, `.npm`, `go/pkg/mod`, `.cargo/registry`, `.cargo/git` — are excluded too, since they only re-populate on next use and can otherwise dwarf everything else in the archive), plus the SSH host keys under `ssh-identity/`. Restore creates a `pre-restore` backup first, stops the workspace container, wipes the home directory, extracts the selected backup, then starts the workspace again.
+
+### Clearing caches
+
+```bash
+cleanup
+```
+
+Runs, in order:
+
+```bash
+uv cache clean
+pip cache purge
+npm cache clean --force
+go clean -cache -modcache -testcache
+rm -rf ~/.cache/electron ~/.cache/node-gyp
+rm -rf ~/.cargo/registry ~/.cargo/git
+```
+
+These are exactly the caches backups already exclude (see above) — safe to run any time, since everything it touches re-populates on next use. It does not touch installed toolchains (`~/.rustup`, `~/.cargo/bin`) or your own virtualenvs (`~/.venvs`) — those aren't caches, and clearing them would break things rather than just cost a re-download.
 
 The host identity is **not** restored unless you ask for it: by default the sandbox keeps the identity it already has, so a restore never triggers "host key changed" warnings on your clients. Passing `--restore-identity` adopts the archived keys instead — expect each client to warn once. Archives made before this existed have no `ssh-identity/` entry; the flag then reports that and leaves the current identity alone. When a new backup is created, **timestamped** backups older than `BACKUP_RETENTION_DAYS` (default: 7) are pruned; **labeled** backups (e.g. `before-refactor`, `pre-restore`) are kept until you delete them.
 

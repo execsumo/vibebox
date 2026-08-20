@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+# Clears package-manager download/build caches that just get re-populated on next
+# use — never anything a tool needs to function (installed toolchains, venvs, and
+# ~/.cargo/bin are untouched). Mirrors the excludes in `backup` / backup.ps1 /
+# backup.sh, so what this clears is exactly what backups never archived anyway.
+echo "=============================================="
+echo "            Clearing Package Caches            "
+echo "=============================================="
+
+Before=$(du -sh "$HOME" 2>/dev/null | cut -f1)
+
+command -v uv >/dev/null 2>&1 && uv cache clean || true
+command -v pip >/dev/null 2>&1 && pip cache purge || true
+command -v npm >/dev/null 2>&1 && npm cache clean --force || true
+command -v go >/dev/null 2>&1 && go clean -cache -modcache -testcache || true
+rm -rf "$HOME/.cache/electron" "$HOME/.cache/node-gyp"
+rm -rf "$HOME/.cargo/registry" "$HOME/.cargo/git"
+
+After=$(du -sh "$HOME" 2>/dev/null | cut -f1)
+
+echo ""
+echo "Done. Home: $Before -> $After"
+echo "=============================================="
