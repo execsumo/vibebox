@@ -345,27 +345,26 @@ update
 ```
 
 Upgrades the tools the image pre-installs: all npm globals (including Bun, which is
-installed as one), Herdr, Antigravity (`agy`), the Hermes WebUI, docling and the
-`pdftotext` bindings, and the `dotfiles` tool — each through its own supported update
-path. It takes seconds to a couple of minutes and **restarts nothing**:
+installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, the Hermes WebUI, docling
+and the `pdftotext` bindings, and the `dotfiles` tool — each through its own supported
+update path. It takes seconds to a couple of minutes.
 
-- Binaries are swapped **atomically** (a same-directory `mv`), so a tool that is running
+- Most tools are swapped **atomically** (a same-directory `mv`), so a tool that is running
   while `update` executes keeps working and picks up the new version on its next launch.
 - Each downloaded binary is smoke-tested before it replaces the working copy, so a
   truncated or unavailable download cannot leave the box without a functioning tool. A
   tool that has gone missing entirely is reinstalled on the next run.
 
-**Two things are reported rather than applied**, because applying them restarts a service
-you may be using. `update` names both at the end of the run and leaves the timing to you:
+**Two things are the exception** — they apply their update immediately and restart the
+service, rather than leaving it pending:
 
-| Pending | Apply with |
+| Step | Effect |
 |---|---|
-| Hermes WebUI code updated, service still on the old version | `hermes-webui restart` |
-| Hermes Agent update available (`update` only runs `--check`) | `hermes update --yes` |
+| Hermes Agent (`hermes update --yes`) | drains and restarts the gateway |
+| Hermes WebUI (`hermes-webui restart`, only if the pull moved HEAD) | restarts the webui |
 
-The agent is check-only for a concrete reason: `hermes update` drains and restarts the
-gateway as part of its run, which on a working box means a gateway that has been serving
-for hours disappears mid-session with no warning.
+Run `update` at a moment when dropping the gateway or the webui session is acceptable —
+those are the two things it can disrupt.
 
 It **does not touch APT or the base image** — that is slow, can restart services, and its
 results would reset on the next `down`/`up` anyway. It does not take a backup first either;
@@ -685,7 +684,7 @@ hermes-webui status|logs|restart|stop|start
 
 `start` and `restart` need no arguments: the entrypoint records the boot host/port and password in `/opt/hermes-webui/.env`, so a hand-restarted webui comes back on the same tailnet-facing bind with authentication intact (see [API Keys](#api-keys)).
 
-**`update` never restarts the webui.** It pulls the new code and syncs dependencies, then tells you a restart is pending and leaves the timing to you — so an update run cannot drop your session. Until you run `hermes-webui restart`, the old version keeps serving.
+**`update` restarts the webui when it actually updates it.** It pulls the new code, syncs dependencies, and runs `hermes-webui restart` — but only when the pull moved HEAD, so an already-current box is left alone. Run `update` at a moment when dropping your webui session is acceptable.
 
 Logs are at `~/.hermes/webui.log`.
 

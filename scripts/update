@@ -3,22 +3,22 @@
 # Runs as the sandbox user; `sudo` is passwordless here and is used only where the target
 # is genuinely root-owned (the npm global prefix, the system Python).
 #
-# This is the *fast, in-place* update path, safe to run mid-session: nothing here restarts
-# a process you might be using, and binaries are swapped atomically so a running tool is
-# never disturbed. It deliberately does NOT touch APT — a system upgrade is slow, can
-# restart services, and its results reset on the next `docker compose down/up` anyway.
-# APT and the base image are the host-side `update-image` script's job.
+# This is the *fast, in-place* update path. Most of it is safe to run mid-session — binaries
+# are swapped atomically so a running tool is never disturbed — but the Hermes Agent and
+# WebUI steps below do apply and restart, so pick your moment for those. It deliberately
+# does NOT touch APT — a system upgrade is slow, can restart services, and its results
+# reset on the next `docker compose down/up` anyway. APT and the base image are the
+# host-side `update-image` script's job.
 echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
 
 TOTAL=7
 
-# Set when a step finds work that would restart something the user may be using. Nothing
-# here acts on its own; both are reported again in the closing summary so the notice
-# cannot scroll past, and the user picks the moment.
-WEBUI_RESTART_NEEDED=0
-HERMES_UPDATE_AVAILABLE=0
+# Set when the Hermes Agent or WebUI step actually applies an update, so the closing
+# summary can call out that a restart happened during this run.
+HERMES_UPDATED=0
+WEBUI_RESTARTED=0
 
 # Every tool this image installs lives in exactly one place: /usr/local/bin for the
 # binary, /usr/local/lib/<tool> for a bundle. Both are image-managed, and both are owned
@@ -123,48 +123,46 @@ echo "3/$TOTAL Updating Antigravity CLI (agy)..."
 # redirects into the scratch directory.
 publish agy 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
 echo ""
-echo "4/$TOTAL Checking the Hermes Agent..."
-# CHECK ONLY — deliberately does not apply. `hermes update` drains and restarts the
-# gateway as part of its run ("draining gateway PID ... / Restarting manual gateway
-# profile(s)"), which is exactly the kind of surprise this script exists to avoid: a
-# gateway that has been serving for hours goes away mid-session with no warning. So the
-# agent gets the same treatment as the WebUI below — report, and leave the timing to the
-# user. `--check` is upstream's own supported "is there anything?" path.
+echo "4/$TOTAL Updating the Hermes Agent..."
+# Applies the update directly. `hermes update` drains and restarts the gateway as part of
+# its run ("draining gateway PID ... / Restarting manual gateway profile(s)"), so a
+# gateway that has been serving for a while goes away for a moment — that trade is made
+# on request here rather than left as a manual step.
 #
 # Absolute path, not PATH: `hermes` is a launcher that hard-codes the tree it belongs to,
 # so this must name the tree the image owns rather than whichever launcher happens to
 # resolve first.
 #
-# Output-matched rather than exit-code-matched: `--check` exits 0 whether or not an
-# update exists, so "Already up to date." is the only reliable signal. A false positive
-# here costs a needless notice; a false negative costs nothing but a later check.
-HERMES_CHECK="$(/usr/local/bin/hermes update --check 2>&1)"
-if [ $? -ne 0 ]; then
-  echo "    hermes check skipped"
-elif printf '%s' "$HERMES_CHECK" | grep -qi 'already up to date'; then
-  echo "    already up to date"
-else
-  HERMES_UPDATE_AVAILABLE=1
-  echo "    update available — apply when convenient:  hermes update --yes"
-  echo "    (this drains and restarts the gateway, so pick your moment)"
+# Output-matched rather than exit-code-matched: `--yes` exits 0 whether or not an update
+# was applied, so "Already up to date." is the only reliable signal for the summary.
+HERMES_OUT="$(/usr/local/bin/hermes update --yes 2>&1)"
+HERMES_RC=$?
+printf '%s\n' "$HERMES_OUT" | sed 's/^/    /'
+if [ "$HERMES_RC" -ne 0 ]; then
+  echo "    hermes update failed"
+elif ! printf '%s' "$HERMES_OUT" | grep -qi 'already up to date'; then
+  HERMES_UPDATED=1
 fi
 echo ""
 echo "5/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
 # /opt/hermes-webui is chowned to the sandbox user at build time, so this needs no sudo.
 #
-# Deliberately does NOT restart the service. This script is meant to be safe to run while
-# you are working, and the webui restart was the one step that would drop a session out
-# from under you. The dependency sync only runs when the pull actually moved HEAD, so an
-# up-to-date box costs nothing here.
+# Restarts the service once an update actually lands, so the new code is what's serving
+# when this script finishes. The dependency sync and restart only run when the pull
+# actually moved HEAD, so an up-to-date box costs nothing here.
 WEBUI_HEAD_BEFORE="$(git -C /opt/hermes-webui rev-parse HEAD 2>/dev/null || echo none)"
 if git -C /opt/hermes-webui pull --ff-only >/dev/null 2>&1; then
   WEBUI_HEAD_AFTER="$(git -C /opt/hermes-webui rev-parse HEAD 2>/dev/null || echo none)"
   if [ "$WEBUI_HEAD_BEFORE" != "$WEBUI_HEAD_AFTER" ]; then
     /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt \
       || echo "    hermes-webui dependency sync skipped"
-    WEBUI_RESTART_NEEDED=1
-    echo "    updated — restart when convenient:  hermes-webui restart"
+    if hermes-webui restart >/dev/null 2>&1; then
+      WEBUI_RESTARTED=1
+      echo "    updated and restarted"
+    else
+      echo "    updated, but restart failed — run manually:  hermes-webui restart"
+    fi
   else
     echo "    already up to date"
   fi
@@ -235,13 +233,11 @@ if [ "$TOOLCHAIN_OK" -eq 1 ]; then
 else
   echo "Tools updated, but the checks above found problems."
 fi
-if [ "$WEBUI_RESTART_NEEDED" -eq 1 ] || [ "$HERMES_UPDATE_AVAILABLE" -eq 1 ]; then
+if [ "$HERMES_UPDATED" -eq 1 ] || [ "$WEBUI_RESTARTED" -eq 1 ]; then
   echo ""
-  echo "Pending, deliberately left for you to time — this run restarted nothing:"
-  [ "$WEBUI_RESTART_NEEDED" -eq 1 ] && \
-    echo "  * Hermes WebUI updated, not restarted:  hermes-webui restart"
-  [ "$HERMES_UPDATE_AVAILABLE" -eq 1 ] && \
-    echo "  * Hermes Agent update available:        hermes update --yes"
+  echo "Restarted during this run:"
+  [ "$HERMES_UPDATED" -eq 1 ] && echo "  * Hermes Agent gateway (via hermes update)"
+  [ "$WEBUI_RESTARTED" -eq 1 ] && echo "  * Hermes WebUI (via hermes-webui restart)"
 fi
 echo ""
 echo "This is the in-place path: it does not touch APT or the base image, and"
