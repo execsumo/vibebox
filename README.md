@@ -370,8 +370,8 @@ service, rather than leaving it pending:
 
 | Step | Effect |
 |---|---|
-| Hermes Agent (`hermes update --yes`) | drains and restarts the gateway |
-| Hermes WebUI (`hermes-webui restart`, only if the pull moved HEAD) | restarts the webui |
+| Hermes Agent (`hermes update --yes`) | drains and restarts the gateway; if the webui was running, stops it first and starts it back up after |
+| Hermes WebUI | pulls and syncs dependencies if there's new code; always restarted around the agent update above, not just when its own repo changed |
 
 Run `update` at a moment when dropping the gateway or the webui session is acceptable —
 those are the two things it can disrupt.
@@ -695,7 +695,7 @@ hermes-webui status|logs|restart|stop|start
 
 `start` and `restart` need no arguments: the entrypoint records the boot host/port and password in `/opt/hermes-webui/.env`, so a hand-restarted webui comes back on the same tailnet-facing bind with authentication intact (see [API Keys](#api-keys)).
 
-**`update` restarts the webui when it actually updates it.** It pulls the new code, syncs dependencies, and runs `hermes-webui restart` — but only when the pull moved HEAD, so an already-current box is left alone. Run `update` at a moment when dropping your webui session is acceptable.
+**`update` stops the webui before updating the Hermes Agent, and starts it back up after — regardless of whether the webui's own code changed.** The Hermes Agent update can move the shared `~/.hermes` state out from under a webui that keeps running in-process through it, which is what used to produce a "please restart the webui" error even on a box where the webui's own repo hadn't changed. It's only restarted if it was actually running beforehand — if you'd left it stopped, `update` leaves it stopped. Run `update` at a moment when dropping your webui session is acceptable.
 
 Logs are at `~/.hermes/webui.log`.
 

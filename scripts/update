@@ -132,6 +132,23 @@ echo "5/$TOTAL Updating droid..."
 # No install-dir env var upstream — it hardcodes ~/.local/bin, same as Antigravity above.
 publish droid 'curl -fsSL https://app.factory.ai/cli | sh'
 echo ""
+# Stop the webui *before* touching the agent, and only if it's actually running right
+# now (respects a box where the operator left it off on purpose). This is not about the
+# webui's own code: `hermes update` below can move the shared ~/.hermes state/version out
+# from under a webui process that keeps running in-process through the update, even when
+# the webui's own repo doesn't change at all in step 7 — that skew is exactly what
+# produces the "please restart the webui" error upstream sometimes surfaces after an
+# agent update. Stopping first and unconditionally starting back up after (see step 7)
+# closes that window instead of leaving it to a manual restart. Verified live 2026-08-22
+# that `hermes-webui start` itself already double-detaches (nohup + trap HUP in ctl.sh),
+# so this does not need its own supervisor the way hermes-gateway/droid-daemon do — those
+# exist because their upstream processes run in the foreground with no daemonization of
+# their own; ctl.sh already has one.
+WEBUI_WAS_RUNNING=0
+if [ -x /opt/hermes-webui/ctl.sh ] && hermes-webui status 2>/dev/null | grep -qx '● hermes-webui — running'; then
+  WEBUI_WAS_RUNNING=1
+  hermes-webui stop >/dev/null 2>&1 || echo "    hermes-webui stop failed — continuing anyway"
+fi
 echo "6/$TOTAL Updating the Hermes Agent..."
 # Applies the update directly. `hermes update` drains and restarts the gateway as part of
 # its run ("draining gateway PID ... / Restarting manual gateway profile(s)"), so a
@@ -157,26 +174,30 @@ echo "7/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
 # /opt/hermes-webui is chowned to the sandbox user at build time, so this needs no sudo.
 #
-# Restarts the service once an update actually lands, so the new code is what's serving
-# when this script finishes. The dependency sync and restart only run when the pull
-# actually moved HEAD, so an up-to-date box costs nothing here.
+# The dependency sync only runs when the pull actually moved HEAD, so an up-to-date repo
+# costs nothing here. The start back up, below, is unconditional on WEBUI_WAS_RUNNING
+# instead — see the note above step 6 for why that has to be independent of whether the
+# webui's own code changed.
 WEBUI_HEAD_BEFORE="$(git -C /opt/hermes-webui rev-parse HEAD 2>/dev/null || echo none)"
 if git -C /opt/hermes-webui pull --ff-only >/dev/null 2>&1; then
   WEBUI_HEAD_AFTER="$(git -C /opt/hermes-webui rev-parse HEAD 2>/dev/null || echo none)"
   if [ "$WEBUI_HEAD_BEFORE" != "$WEBUI_HEAD_AFTER" ]; then
     /opt/hermes-webui/.venv/bin/pip install -q -r /opt/hermes-webui/requirements.txt \
       || echo "    hermes-webui dependency sync skipped"
-    if hermes-webui restart >/dev/null 2>&1; then
-      WEBUI_RESTARTED=1
-      echo "    updated and restarted"
-    else
-      echo "    updated, but restart failed — run manually:  hermes-webui restart"
-    fi
+    echo "    updated"
   else
     echo "    already up to date"
   fi
 else
   echo "    hermes-webui update skipped"
+fi
+if [ "$WEBUI_WAS_RUNNING" -eq 1 ]; then
+  if hermes-webui start >/dev/null 2>&1; then
+    WEBUI_RESTARTED=1
+    echo "    restarted"
+  else
+    echo "    restart failed — run manually:  hermes-webui start"
+  fi
 fi
 echo ""
 echo "8/$TOTAL Updating docling and the pdftotext bindings..."
@@ -246,7 +267,7 @@ if [ "$HERMES_UPDATED" -eq 1 ] || [ "$WEBUI_RESTARTED" -eq 1 ]; then
   echo ""
   echo "Restarted during this run:"
   [ "$HERMES_UPDATED" -eq 1 ] && echo "  * Hermes Agent gateway (via hermes update)"
-  [ "$WEBUI_RESTARTED" -eq 1 ] && echo "  * Hermes WebUI (via hermes-webui restart)"
+  [ "$WEBUI_RESTARTED" -eq 1 ] && echo "  * Hermes WebUI (stopped before the agent update, started back up after)"
 fi
 echo ""
 echo "This is the in-place path: it does not touch APT or the base image, and"
