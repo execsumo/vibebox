@@ -221,4 +221,17 @@ if command -v hermes >/dev/null 2>&1; then
     /usr/local/bin/hermes-gateway start || echo "hermes gateway failed to start (non-fatal)"
 fi
 
+# Start the droid remote-access daemon if it's installed. Same no-systemd
+# situation as hermes-gateway above: droid-daemon (scripts/droid-daemon)
+# supervises `droid daemon --remote-access` and relaunches it whenever it
+# exits. Non-fatal and safe to attempt unconditionally — nothing runs if
+# droid isn't installed. The Dockerfile installs droid into /usr/local/bin
+# (image-managed, same as hermes/herdr/agy), so a plain `command -v` here
+# sees it just like it sees those.
+if command -v droid >/dev/null 2>&1; then
+  SANDBOX_USER="$(getent passwd 1000 | cut -d: -f1)"
+  runuser -u "$SANDBOX_USER" -- env HOME="$SANDBOX_HOME" \
+    /usr/local/bin/droid-daemon start || echo "droid daemon failed to start (non-fatal)"
+fi
+
 exec "$@"

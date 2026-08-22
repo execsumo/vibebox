@@ -1,0 +1,72 @@
+#!/bin/bash
+# Supervises `droid daemon --remote-access` in the background.
+#
+# This container has no init system (see scripts/entrypoint's note on
+# hermes-webui/hermes-gateway for why), so there's nothing to hand a "restart
+# on crash" policy to. This script is that policy: start the daemon, and if
+# it ever exits for any reason — crash, killed, `droid` updating itself,
+# whatever — relaunch it after a short delay. Mirrors hermes-gateway's
+# start|stop|restart|status|logs interface so all supervised services in the
+# box are driven the same way.
+set -e
+
+DROID_DIR="${HOME}/.vibebox/droid"
+LOGFILE="$DROID_DIR/daemon.log"
+PIDFILE="$DROID_DIR/supervisor.pid"
+mkdir -p "$DROID_DIR"
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+case "${1:-start}" in
+  start)
+    if is_running; then
+      echo "droid daemon already running (pid $(cat "$PIDFILE"))"
+      exit 0
+    fi
+    # setsid makes the supervisor its own session/process-group leader, so `stop`
+    # below can kill it and the `droid daemon` child it spawns in one shot via
+    # the negative (group) pid — a plain `kill $pid` would leave the child
+    # running as an orphan.
+    setsid env LOGFILE="$LOGFILE" bash -c '
+      while true; do
+        droid daemon --remote-access >>"$LOGFILE" 2>&1
+        # Short backoff so a daemon that fails immediately (bad config, no
+        # network yet at boot) crash-loops slowly instead of spinning the CPU.
+        sleep 2
+      done
+    ' </dev/null >/dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    disown
+    echo "droid daemon started (pid $(cat "$PIDFILE"))"
+    ;;
+  stop)
+    if is_running; then
+      pid="$(cat "$PIDFILE")"
+      kill -TERM -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      rm -f "$PIDFILE"
+      echo "droid daemon stopped"
+    else
+      echo "droid daemon not running"
+    fi
+    ;;
+  restart)
+    "$0" stop
+    "$0" start
+    ;;
+  status)
+    if is_running; then
+      echo "droid daemon running (pid $(cat "$PIDFILE"))"
+    else
+      echo "droid daemon not running"
+    fi
+    ;;
+  logs)
+    exec tail -n 200 -f "$LOGFILE"
+    ;;
+  *)
+    echo "usage: droid-daemon {start|stop|restart|status|logs}" >&2
+    exit 1
+    ;;
+esac

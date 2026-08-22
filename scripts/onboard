@@ -112,6 +112,41 @@ else
   fi
 fi
 
+# ── 4. CodeGraph agent wiring ─────────────────────────────────────────────────
+# Registers the CodeGraph MCP server with every agent installed in this box that it
+# knows how to configure (Claude Code, Codex CLI, Hermes Agent, Antigravity). Run after
+# dotfiles: agent config files (~/.claude.json etc.) may just have been replaced by
+# symlinks into the dotfiles repo, and this needs to patch the file that is actually
+# live, not one about to be swapped out from under it. Machine-wide (one run covers
+# every project) — per-project indexing is a separate, explicit `codegraph init` the
+# user runs themselves in each repo they want it in.
+step "CodeGraph agent wiring"
+if ! command -v codegraph &>/dev/null; then
+  warn "codegraph not installed — skipping (rebuild the image to install it)"
+else
+  if codegraph install --target=auto --yes; then
+    ok "CodeGraph wired into detected agents — restart any that were already running"
+  else
+    warn "CodeGraph wiring did not complete — re-run 'codegraph install' manually"
+  fi
+fi
+
+# ── 5. RTK token-saving hook ──────────────────────────────────────────────────
+# Installs RTK's Claude Code hook globally (~/.claude/settings.json) so it applies to
+# every project, not just one. No account or login involved — this only patches local
+# config. Same ordering reason as CodeGraph above: after dotfiles, so it patches the
+# settings.json that is actually live.
+step "RTK token-saving hook"
+if ! command -v rtk &>/dev/null; then
+  warn "rtk not installed — skipping (rebuild the image to install it)"
+else
+  if rtk init --global; then
+    ok "RTK hook installed globally — restart Claude Code for it to take effect"
+  else
+    warn "RTK setup did not complete — re-run 'rtk init --global' manually"
+  fi
+fi
+
 echo ""
 echo "================================================"
 echo "  Setup complete. Enjoy your sandbox."

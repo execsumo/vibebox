@@ -13,7 +13,7 @@ echo "=============================================="
 echo "       Updating Sandbox Software Suite        "
 echo "=============================================="
 
-TOTAL=7
+TOTAL=9
 
 # Set when the Hermes Agent or WebUI step actually applies an update, so the closing
 # summary can call out that a restart happened during this run.
@@ -79,7 +79,7 @@ publish() {
   rm -rf "$scratch"
 }
 
-echo "1/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, language servers)..."
+echo "1/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, CodeGraph, language servers)..."
 # Reinstall at @latest rather than `npm update -g`: for globals npm stays within the
 # semver range the package was installed under, so it never crosses a major — and these
 # CLIs (Claude Code especially) move majors. This is also the *only* in-place update path
@@ -112,6 +112,7 @@ sudo npm install -g --no-fund --no-audit \
 sudo npm install -g --no-fund --no-audit codeburn@latest || echo "    codeburn update skipped"
 sudo npm install -g --no-fund --no-audit --ignore-scripts @earendil-works/pi-coding-agent@latest \
   || echo "    Pi update skipped"
+sudo npm install -g --no-fund --no-audit @colbymchenry/codegraph@latest || echo "    codegraph update skipped"
 echo ""
 echo "2/$TOTAL Updating Herdr..."
 # HERDR_INSTALL_DIR points the installer at the scratch directory rather than straight at
@@ -123,7 +124,15 @@ echo "3/$TOTAL Updating Antigravity CLI (agy)..."
 # redirects into the scratch directory.
 publish agy 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
 echo ""
-echo "4/$TOTAL Updating the Hermes Agent..."
+echo "4/$TOTAL Updating RTK..."
+# RTK_INSTALL_DIR points the installer at the scratch directory, mirroring Herdr above.
+publish rtk 'curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | env RTK_INSTALL_DIR="$PUBLISH_DIR" sh'
+echo ""
+echo "5/$TOTAL Updating droid..."
+# No install-dir env var upstream — it hardcodes ~/.local/bin, same as Antigravity above.
+publish droid 'curl -fsSL https://app.factory.ai/cli | sh'
+echo ""
+echo "6/$TOTAL Updating the Hermes Agent..."
 # Applies the update directly. `hermes update` drains and restarts the gateway as part of
 # its run ("draining gateway PID ... / Restarting manual gateway profile(s)"), so a
 # gateway that has been serving for a while goes away for a moment — that trade is made
@@ -144,7 +153,7 @@ elif ! printf '%s' "$HERMES_OUT" | grep -qi 'already up to date'; then
   HERMES_UPDATED=1
 fi
 echo ""
-echo "5/$TOTAL Updating Hermes WebUI..."
+echo "7/$TOTAL Updating Hermes WebUI..."
 # After the agent, deliberately: upstream warns against version skew between the two.
 # /opt/hermes-webui is chowned to the sandbox user at build time, so this needs no sudo.
 #
@@ -170,7 +179,7 @@ else
   echo "    hermes-webui update skipped"
 fi
 echo ""
-echo "6/$TOTAL Updating docling and the pdftotext bindings..."
+echo "8/$TOTAL Updating docling and the pdftotext bindings..."
 # System-Python installs (see the Dockerfile's step 7c for why they are not in a venv),
 # so this needs sudo and PEP 668's --break-system-packages, same as the build.
 #
@@ -189,7 +198,7 @@ sudo env DOCLING_TORCH_INDEX="${DOCLING_TORCH_INDEX-https://download.pytorch.org
            docling pdftotext' \
   || echo "    docling / pdftotext update skipped"
 echo ""
-echo "7/$TOTAL Updating the dotfiles tool..."
+echo "9/$TOTAL Updating the dotfiles tool..."
 # A single self-contained script, installed in the image by Docker's ADD from this same
 # URL — so a plain fetch into the scratch directory is the whole "installer" here.
 DOTTER_REPO="${DOTTER_REPO:-execsumo/dotter}"
@@ -204,7 +213,7 @@ echo ""
 # and is still executable.
 echo "Verifying the toolchain..."
 TOOLCHAIN_OK=1
-for t in claude codex bun node npm gh docker hermes herdr agy codeburn pi dotfiles docling; do
+for t in claude codex bun node npm gh docker hermes herdr agy rtk droid codeburn pi codegraph dotfiles docling; do
   if ! command -v "$t" >/dev/null 2>&1; then
     printf '  %-12s MISSING\n' "$t"; TOOLCHAIN_OK=0
   elif ! "$t" --version >/dev/null 2>&1; then

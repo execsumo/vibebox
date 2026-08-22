@@ -10,6 +10,7 @@ ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
 ARG CODEBURN_VERSION=latest
 ARG PI_CODING_AGENT_VERSION=latest
+ARG CODEGRAPH_VERSION=latest
 ARG PYRIGHT_VERSION=latest
 ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest
 ARG TYPESCRIPT_VERSION=latest
@@ -139,6 +140,13 @@ RUN npm install -g codeburn@${CODEBURN_VERSION} || echo "codeburn setup skipped"
 # fail a build that already produced the whole core toolchain.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} || echo "Pi setup skipped"
 
+# 4d. Install CodeGraph (local code knowledge-graph MCP server for coding agents) as a
+# tolerated npm global. Only the CLI binary — wiring it into each agent's config
+# (`codegraph install`) touches files under $HOME, so that step runs per-user in
+# `onboard` instead, same reasoning as the RTK step there. Tolerated like codeburn/pi:
+# a registry hiccup on an optional tool must not fail the whole build.
+RUN npm install -g --no-fund --no-audit @colbymchenry/codegraph@${CODEGRAPH_VERSION} || echo "codegraph setup skipped"
+
 # ── Tool install rule ─────────────────────────────────────────────────────────────────
 # Every tool below lands in /usr/local/bin (binary) and, for bundles, /usr/local/lib/<tool>.
 # Never in a user's $HOME: that is a persisted volume, and ~/.local/bin precedes
@@ -159,6 +167,24 @@ RUN (curl -fsSL https://antigravity.google/cli/install.sh | bash && cp /root/.lo
 # build with no herdr on $PATH at all.
 RUN (curl -fsSL https://herdr.dev/install.sh | env HERDR_INSTALL_DIR=/usr/local/bin sh) \
     || echo "Herdr CLI setup skipped"
+
+# 6b. Install RTK (token-saving Claude Code hook for git/npm/cargo/etc. commands) via
+# the official installer. RTK_INSTALL_DIR (upstream's override, mirroring Herdr's own
+# env var above) points it straight at /usr/local/bin instead of the default
+# ~/.local/bin, so the binary lands in the image-managed tree like everything else here.
+# Only the CLI itself: wiring the hook into Claude Code's settings.json (`rtk init
+# --global`) edits a file under $HOME, so that runs per-user in `onboard` instead.
+RUN (curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh | env RTK_INSTALL_DIR=/usr/local/bin sh) \
+    || echo "RTK setup skipped"
+
+# 6c. Install the droid CLI (Factory) via the official installer.
+# Upstream hardcodes $HOME/.local/bin with no override env var (unlike Herdr/RTK above),
+# so this follows the Antigravity pattern instead: install under root's (ephemeral)
+# $HOME, then copy the finished binary into the image-managed tree.
+# `droid daemon --remote-access` is supervised at container boot by
+# scripts/droid-daemon — see the "Droid Remote Access" section of the README.
+RUN (curl -fsSL https://app.factory.ai/cli | sh && cp /root/.local/bin/droid /usr/local/bin/droid && chmod +x /usr/local/bin/droid) \
+    || echo "droid CLI setup skipped or requires manual auth"
 
 # 7. Install Hermes Agent via the official installer.
 # Running as root, the installer uses root-mode and lands the binary in /usr/local/bin
@@ -244,7 +270,7 @@ RUN set -e; \
       command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; \
       ver "$t" >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
     done; \
-    for t in agy herdr hermes codeburn pi docling; do \
+    for t in agy herdr rtk droid hermes codeburn pi codegraph docling; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! ver "$t" >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \
@@ -313,7 +339,7 @@ RUN mkdir -p /home/${USERNAME}/.ssh && \
 COPY scripts/ /usr/local/bin/
 # chmod explicitly — the execute bit does not survive a Windows/git checkout reliably.
 RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup /usr/local/bin/cleanup \
-             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/hermes-gateway /usr/local/bin/entrypoint /usr/local/bin/tailscale
+             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/hermes-gateway /usr/local/bin/droid-daemon /usr/local/bin/entrypoint /usr/local/bin/tailscale
 
 # The dotfiles tool is a standalone project; vibebox is just a consumer of it.
 # It owns the manifest format and all git/symlink mechanics, so there is no

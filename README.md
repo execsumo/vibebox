@@ -33,7 +33,10 @@ Details on each step below.
 | Pi (`pi`) | AI coding agent (Earendil Works) |
 | Hermes Agent | AI coding agent (Nous Research) |
 | Hermes WebUI | Web frontend for Hermes Agent, served at `https://hermes.<tailnet>.ts.net` |
+| Droid (`droid`) | AI coding agent (Factory), remote-access daemon supervised at boot — see [Droid Remote Access](#droid-remote-access) |
 | codeburn | AI spend tracker (by task, tool, model, project) |
+| RTK (`rtk`) | Token-saving Claude Code hook for git/npm/cargo/etc. commands — see [RTK](#rtk) |
+| CodeGraph (`codegraph`) | Local code knowledge-graph MCP server for coding agents — see [CodeGraph](#codegraph) |
 | Node.js + npm | LTS (v22 by default) |
 | Bun | Fast JS runtime / package manager |
 | Python | System Python 3 |
@@ -79,7 +82,7 @@ Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — insta
 - Tailscale sidecar for remote access without opening a public port
 - A persistent Docker volume for your home directory (optionally a host folder you can browse from Windows) — your files, config, and SSH host identity survive rebuilds; everything else comes from the image
 - `backup` / `restore` commands (inside container and host scripts)
-- `onboard` command for first-time setup: GitHub CLI auth, git identity, dotfiles
+- `onboard` command for first-time setup: GitHub CLI auth, git identity, dotfiles, CodeGraph agent wiring, RTK hook install
 
 ---
 
@@ -231,8 +234,10 @@ This one-time script personalizes the sandbox. It is idempotent — safe to re-r
 1. **GitHub CLI auth** — runs `gh auth login` if not already authenticated
 2. **Git identity** — sets `user.name` and `user.email` in `~/.gitconfig`, pre-filling values from your GitHub profile
 3. **Dotfiles** — clones `github.com/<your-gh-username>/dotfiles` (or a URL you enter) into `~/.dotfiles` and symlinks supported files into `$HOME`
+4. **CodeGraph agent wiring** — runs `codegraph install --target=auto --yes`, registering the CodeGraph MCP server with every agent it detects in the box
+5. **RTK token-saving hook** — runs `rtk init --global`, installing RTK's Claude Code hook for every project rather than one at a time
 
-Details on the dotfiles step are in the [Dotfiles](#dotfiles) section.
+Steps 4 and 5 run after dotfiles deliberately, so they patch the agent config files dotfiles just linked into place rather than a copy about to be replaced. Details on the dotfiles step are in the [Dotfiles](#dotfiles) section; RTK and CodeGraph have their own sections below.
 
 ---
 
@@ -344,10 +349,15 @@ There are two update paths, and they are deliberately different jobs.
 update
 ```
 
-Upgrades the tools the image pre-installs: all npm globals (including Bun, which is
-installed as one), Herdr, Antigravity (`agy`), the Hermes Agent, the Hermes WebUI, docling
-and the `pdftotext` bindings, and the `dotfiles` tool — each through its own supported
-update path. It takes seconds to a couple of minutes.
+Upgrades the tools the image pre-installs: all npm globals (including Bun and CodeGraph,
+which are installed as one), Herdr, Antigravity (`agy`), RTK, droid, the Hermes Agent, the
+Hermes WebUI, docling and the `pdftotext` bindings, and the `dotfiles` tool — each through
+its own supported update path. It takes seconds to a couple of minutes.
+
+Updating RTK or CodeGraph's *binary* here does not touch the per-user wiring `onboard`
+set up (the Claude Code hook, the MCP server registration) — that config does not change
+between versions. Re-run `codegraph install --target=auto --yes` or `rtk init --global`
+yourself only if you want to pick up a newly supported agent.
 
 - Most tools are swapped **atomically** (a same-directory `mv`), so a tool that is running
   while `update` executes keeps working and picks up the new version on its next launch.
@@ -591,6 +601,7 @@ CLAUDE_CODE_VERSION=latest
 CODEX_VERSION=latest
 CODEBURN_VERSION=latest
 PI_CODING_AGENT_VERSION=latest
+CODEGRAPH_VERSION=latest
 PYRIGHT_VERSION=latest
 TYPESCRIPT_VERSION=latest
 TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest
@@ -604,7 +615,7 @@ The core toolchain intentionally tracks `latest` — backups rewind the persiste
 
 ### API Keys
 
-None are required. Every bundled agent (Claude Code, Codex, Antigravity, Herdr, Hermes, Pi) authenticates interactively inside the container via its own flow — `claude auth`, `codex login`, `gh auth`, `pi` then `/login`.
+None are required. Every bundled agent (Claude Code, Codex, Antigravity, Herdr, Hermes, Pi, Droid) authenticates interactively inside the container via its own flow — `claude auth`, `codex login`, `gh auth`, `pi` then `/login`, `droid` then sign in via the browser link it prints.
 
 If you would rather a tool read a key from the environment, add it to `.env` and rebuild. For example, Pi honours `ANTHROPIC_API_KEY` when set:
 
@@ -712,6 +723,70 @@ hermes-gateway status|logs|restart|stop|start
 Logs are at `~/.hermes/logs/gateway.log`. If the gateway isn't configured yet, run
 `hermes gateway setup` first — an unconfigured gateway just exits immediately and
 `hermes-gateway` won't keep retrying until you start it again.
+
+---
+
+## Droid Remote Access
+
+Same no-init-system problem as the gateway above, for [Factory's](https://factory.ai)
+`droid` CLI: `droid daemon --remote-access` has nothing to restart it if it crashes or
+gets killed. `droid-daemon` (`scripts/droid-daemon`) supervises it as a background
+process — relaunching it on any exit, not just a specific "please restart me" code — and
+the entrypoint starts it automatically on boot if `droid` is installed
+(`~/.local/bin/droid`, where Factory's own installer puts it). Manage it from inside the
+sandbox with:
+
+```bash
+droid-daemon status|logs|restart|stop|start
+```
+
+Logs are at `~/.vibebox/droid/daemon.log`.
+
+---
+
+## RTK
+
+[RTK](https://www.rtk-ai.app) is a Claude Code hook that transparently rewrites verbose
+commands (git, npm, cargo, and similar) before execution to cut token usage, with no
+account or login involved — it only patches local config.
+
+The CLI itself (`rtk`) is baked into the image. Wiring it into your Claude Code config is
+a separate, per-user step (`rtk init --global` patches `~/.claude/settings.json`, which
+lives on the persisted home volume) — `onboard` runs it automatically. To re-run it by
+hand, or to pick it up after restoring a backup that predates onboarding:
+
+```bash
+rtk init --global
+```
+
+Restart Claude Code afterwards for the hook to take effect. `rtk gain` shows the running
+savings dashboard; `rtk --version` confirms the install.
+
+---
+
+## CodeGraph
+
+[CodeGraph](https://colbymchenry.github.io/codegraph/) builds a local code knowledge graph
+that Claude Code, Codex, Hermes Agent, and Antigravity can query directly — fewer tokens
+and tool calls spent having the agent re-discover your codebase's structure every session.
+
+The CLI itself (`codegraph`) is baked into the image. Registering it with each agent is a
+separate, per-user step (`codegraph install` edits each agent's own config under `$HOME`)
+— `onboard` runs it automatically for every agent it detects. To re-run it by hand, or to
+pick it up after installing a new agent or restoring a backup that predates onboarding:
+
+```bash
+codegraph install --target=auto --yes
+```
+
+Restart any agent that was already running for the MCP server to load. Agent wiring alone
+does not index any code — that is a separate, **per-project** step you run yourself in
+each repository you want it in:
+
+```bash
+cd your-project
+codegraph init
+```
 
 ---
 
