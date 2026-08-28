@@ -11,6 +11,7 @@ ARG CODEX_VERSION=latest
 ARG CODEBURN_VERSION=latest
 ARG PI_CODING_AGENT_VERSION=latest
 ARG CODEGRAPH_VERSION=latest
+ARG GOOGLE_WORKSPACE_CLI_VERSION=latest
 ARG PYRIGHT_VERSION=latest
 ARG TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest
 ARG TYPESCRIPT_VERSION=latest
@@ -147,6 +148,14 @@ RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_CODING_
 # a registry hiccup on an optional tool must not fail the whole build.
 RUN npm install -g --no-fund --no-audit @colbymchenry/codegraph@${CODEGRAPH_VERSION} || echo "codegraph setup skipped"
 
+# 4e. Install the Google Workspace CLI (gws, https://github.com/googleworkspace/cli) as an
+# npm global. The npm package just downloads the prebuilt platform binary on install, so
+# this is the same shape as codeburn/pi/codegraph above rather than the curl-installer
+# pattern used below — tolerated so a registry or binary-download hiccup cannot fail a
+# build that already produced the whole core toolchain. Auth (`gws auth setup`/`login`) is
+# left to the user, same as the other agents.
+RUN npm install -g --no-fund --no-audit @googleworkspace/cli@${GOOGLE_WORKSPACE_CLI_VERSION} || echo "Google Workspace CLI setup skipped"
+
 # ── Tool install rule ─────────────────────────────────────────────────────────────────
 # Every tool below lands in /usr/local/bin (binary) and, for bundles, /usr/local/lib/<tool>.
 # Never in a user's $HOME: that is a persisted volume, and ~/.local/bin precedes
@@ -270,7 +279,7 @@ RUN set -e; \
       command -v "$t" >/dev/null || { echo "FATAL: $t missing"; exit 1; }; \
       ver "$t" >/dev/null 2>&1 || { echo "FATAL: $t installed but fails to run"; exit 1; }; \
     done; \
-    for t in agy herdr rtk droid hermes codeburn pi codegraph docling; do \
+    for t in agy herdr rtk droid hermes codeburn pi codegraph gws docling; do \
       if ! command -v "$t" >/dev/null; then echo "WARNING: $t not installed (non-fatal)"; \
       elif ! ver "$t" >/dev/null 2>&1; then echo "WARNING: $t installed but fails to run (non-fatal)"; fi; \
     done; \

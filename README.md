@@ -37,6 +37,7 @@ Details on each step below.
 | codeburn | AI spend tracker (by task, tool, model, project) |
 | RTK (`rtk`) | Token-saving Claude Code hook for git/npm/cargo/etc. commands — see [RTK](#rtk) |
 | CodeGraph (`codegraph`) | Local code knowledge-graph MCP server for coding agents — see [CodeGraph](#codegraph) |
+| Google Workspace CLI (`gws`) | Drive, Gmail, Calendar, and other Workspace APIs (Google) |
 | Node.js + npm | LTS (v22 by default) |
 | Bun | Fast JS runtime / package manager |
 | Python | System Python 3 |
@@ -602,6 +603,7 @@ CODEX_VERSION=latest
 CODEBURN_VERSION=latest
 PI_CODING_AGENT_VERSION=latest
 CODEGRAPH_VERSION=latest
+GOOGLE_WORKSPACE_CLI_VERSION=latest
 PYRIGHT_VERSION=latest
 TYPESCRIPT_VERSION=latest
 TYPESCRIPT_LANGUAGE_SERVER_VERSION=latest

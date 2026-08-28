@@ -79,7 +79,7 @@ publish() {
   rm -rf "$scratch"
 }
 
-echo "1/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, CodeGraph, language servers)..."
+echo "1/$TOTAL Updating global NPM CLIs (Claude Code, Codex, Bun, Pi, codeburn, CodeGraph, gws, language servers)..."
 # Reinstall at @latest rather than `npm update -g`: for globals npm stays within the
 # semver range the package was installed under, so it never crosses a major — and these
 # CLIs (Claude Code especially) move majors. This is also the *only* in-place update path
@@ -113,6 +113,7 @@ sudo npm install -g --no-fund --no-audit codeburn@latest || echo "    codeburn u
 sudo npm install -g --no-fund --no-audit --ignore-scripts @earendil-works/pi-coding-agent@latest \
   || echo "    Pi update skipped"
 sudo npm install -g --no-fund --no-audit @colbymchenry/codegraph@latest || echo "    codegraph update skipped"
+sudo npm install -g --no-fund --no-audit @googleworkspace/cli@latest || echo "    gws update skipped"
 echo ""
 echo "2/$TOTAL Updating Herdr..."
 # HERDR_INSTALL_DIR points the installer at the scratch directory rather than straight at
@@ -234,7 +235,7 @@ echo ""
 # and is still executable.
 echo "Verifying the toolchain..."
 TOOLCHAIN_OK=1
-for t in claude codex bun node npm gh docker hermes herdr agy rtk droid codeburn pi codegraph dotfiles docling; do
+for t in claude codex bun node npm gh docker hermes herdr agy rtk droid codeburn pi codegraph gws dotfiles docling; do
   if ! command -v "$t" >/dev/null 2>&1; then
     printf '  %-12s MISSING\n' "$t"; TOOLCHAIN_OK=0
   elif ! "$t" --version >/dev/null 2>&1; then
