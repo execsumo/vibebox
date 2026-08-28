@@ -345,10 +345,26 @@ RUN mkdir -p /home/${USERNAME}/.ssh && \
 # Install the in-container commands (onboard, backup, update, launch) and the
 # entrypoint as real files from scripts/.
 # Editing these is now editing a shell script — no Dockerfile heredocs.
+#
+# Three of these are a different kind of file from the rest: scripts/npm and
+# scripts/pip3 are wrappers (not replacements) around the real npm/pip3 —
+# they run the real binary via its absolute path and only add a hint after a
+# failure whose cause is specific and common (a root-owned global-install
+# prefix, PEP 668) — and scripts/systemctl is a stub, since this container
+# has no init system and there is no real systemctl to wrap. All three win
+# by PATH order alone (/usr/local/bin precedes /usr/bin), same mechanism as
+# every other command here.
 COPY scripts/ /usr/local/bin/
 # chmod explicitly — the execute bit does not survive a Windows/git checkout reliably.
 RUN chmod +x /usr/local/bin/onboard /usr/local/bin/backup /usr/local/bin/cleanup \
-             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/hermes-gateway /usr/local/bin/droid-daemon /usr/local/bin/entrypoint /usr/local/bin/tailscale
+             /usr/local/bin/update  /usr/local/bin/launch /usr/local/bin/hermes-webui /usr/local/bin/hermes-gateway /usr/local/bin/droid-daemon /usr/local/bin/entrypoint /usr/local/bin/tailscale \
+             /usr/local/bin/npm /usr/local/bin/pip3 /usr/local/bin/systemctl
+
+# NO_SYSTEMD.md, shipped so the systemctl stub above (scripts/systemctl) can
+# point somewhere that works with no network access. Its own location
+# (/usr/local/share, not /usr/local/bin) keeps it out of $PATH lookups — it
+# is documentation, not a command.
+COPY NO_SYSTEMD.md /usr/local/share/vibebox/no-systemd.md
 
 # The dotfiles tool is a standalone project; vibebox is just a consumer of it.
 # It owns the manifest format and all git/symlink mechanics, so there is no

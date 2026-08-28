@@ -1,0 +1,28 @@
+#!/bin/bash
+# Wraps npm to translate a `-g` EACCES failure into an actionable hint. This
+# image's npm global prefix is /usr (NodeSource's default), deliberately
+# root-owned — see the Dockerfile's step-4a note, and `update`'s own `sudo npm
+# install -g` — so `npm install -g <pkg>` as the sandbox user fails with a
+# permission-denied stack trace that never says "use sudo" anywhere.
+#
+# Lives in /usr/local/bin, ahead of the real npm (/usr/bin/npm, from the
+# NodeSource package) on $PATH — same mechanism as every other vibebox
+# command. Everything about npm's own behavior is unchanged, including live
+# output (piped through `tee`, not buffered): this only adds a note after a
+# failure that actually matches this specific, common cause.
+REAL_NPM=/usr/bin/npm
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+
+"$REAL_NPM" "$@" 2>&1 | tee "$LOG"
+rc=${PIPESTATUS[0]}
+
+if [ "$rc" -ne 0 ] \
+   && grep -qE '(^|[[:space:]])(-g|--global)([[:space:]]|$)' <<< "$*" \
+   && grep -q 'EACCES' "$LOG"; then
+  echo "" >&2
+  echo "Hint: this box's npm global prefix (/usr) is root-owned by design — retry with:" >&2
+  echo "  sudo npm $*" >&2
+fi
+
+exit "$rc"

@@ -84,6 +84,7 @@ Heavier servers (rust-analyzer, gopls, sourcekit-lsp) are not included — insta
 - A persistent Docker volume for your home directory (optionally a host folder you can browse from Windows) — your files, config, and SSH host identity survive rebuilds; everything else comes from the image
 - `backup` / `restore` commands (inside container and host scripts)
 - `onboard` command for first-time setup: GitHub CLI auth, git identity, dotfiles, CodeGraph agent wiring, RTK hook install
+- Friendlier errors for the box's common gotchas: `npm install -g`, `pip3 install`, and `systemctl` all explain themselves on failure instead of leaving you with a raw stack trace — see [Running a Process Without systemd](#running-a-process-without-systemd)
 
 ---
 
@@ -789,6 +790,38 @@ each repository you want it in:
 cd your-project
 codegraph init
 ```
+
+---
+
+## Running a Process Without systemd
+
+This is a container, not a VPS: there's no init system (PID 1 is
+`scripts/entrypoint`), so anything that expects `systemctl enable --now` to
+run a service has nothing to talk to. If you type a `systemctl` command
+yourself, it explains this rather than failing with "command not found" — it
+is a stub, not the real thing.
+
+The fix is a small restart-loop wrapper you run by hand (or wire into the
+entrypoint to start at boot). The full recipe — a copy-pasteable template,
+plus how the box's own `hermes-gateway` and `droid-daemon` are built from
+it — is in [`NO_SYSTEMD.md`](NO_SYSTEMD.md). The same file ships inside the
+image at `/usr/local/share/vibebox/no-systemd.md`, so it's there even
+without network access.
+
+`npm install -g` and `pip3 install` get the same "friendlier error, not
+different behavior" treatment for their own common failure modes. Both are
+thin wrappers (`scripts/npm`, `scripts/pip3`) around the real binary — same
+output, same exit code — that add one hint, and only when it actually
+applies:
+
+- `npm install -g <pkg>` as yourself fails with `EACCES` on
+  `/usr/lib/node_modules` — this image's npm global prefix (`/usr`) is
+  root-owned by design (`update` itself uses `sudo npm install -g`), so the
+  hint is to retry with `sudo`.
+- `pip3 install <pkg>` fails with `externally-managed-environment` — Ubuntu
+  24.04 marks the system Python as externally managed (PEP 668), so the hint
+  points at a venv for project-specific packages, or `--break-system-packages`
+  (plus `sudo`) for something meant to be available everywhere.
 
 ---
 

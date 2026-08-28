@@ -1,0 +1,22 @@
+#!/bin/bash
+# Stub for systemctl: this container has no init system at all (PID 1 is
+# scripts/entrypoint, not systemd or launchd), so there is no real binary to
+# wrap the way scripts/npm and scripts/pip3 wrap theirs — this *is* the only
+# systemctl in the image.
+#
+# Exits non-zero, same as a genuinely failing systemctl call, so a caller
+# that checks the exit code (or probes `command -v systemctl` before
+# assuming success) still behaves correctly — the failure just explains
+# itself instead of surfacing as "command not found" or a dbus connection
+# error with no context.
+cat >&2 <<'EOF'
+systemctl: not available — this container has no init system (PID 1 is
+vibebox's own entrypoint, not systemd or launchd).
+
+To run something as a persistent background process instead:
+  cat /usr/local/share/vibebox/no-systemd.md   (recipe + copy-pasteable template)
+  NO_SYSTEMD.md in the execsumo/vibebox repo (same file, rendered on GitHub)
+
+Real examples already in this box: scripts/hermes-gateway, scripts/droid-daemon.
+EOF
+exit 1

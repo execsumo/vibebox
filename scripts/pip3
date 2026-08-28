@@ -1,0 +1,32 @@
+#!/bin/bash
+# Wraps pip3 to translate a PEP 668 "externally-managed-environment" failure
+# into an actionable hint. Ubuntu 24.04 marks the system Python as externally
+# managed, so a bare `pip3 install X` fails with a wall of text that never
+# says what to do about it — this image's own docling/pdftotext install
+# (Dockerfile step 7c) needed --break-system-packages for the same reason.
+#
+# Lives in /usr/local/bin, ahead of the real pip3 (/usr/bin/pip3, from the
+# python3-pip package) on $PATH, same mechanism as scripts/npm. Everything
+# about pip's own behavior is unchanged, including live output (piped through
+# `tee`, not buffered): this only adds a note after a failure that actually
+# matches this specific, common cause.
+REAL_PIP3=/usr/bin/pip3
+LOG="$(mktemp)"
+trap 'rm -f "$LOG"' EXIT
+
+"$REAL_PIP3" "$@" 2>&1 | tee "$LOG"
+rc=${PIPESTATUS[0]}
+
+if [ "$rc" -ne 0 ] && grep -qi 'externally-managed-environment' "$LOG"; then
+  cat >&2 <<'EOF'
+
+Hint: Ubuntu marks the system Python as externally managed (PEP 668).
+For project-specific packages, use a venv instead:
+  python3 -m venv .venv && . .venv/bin/activate && pip install ...
+To install system-wide anyway (matches how this image installs its own
+Python tooling), add the override flag (and sudo, for a system-wide install):
+  pip3 install --break-system-packages ...
+EOF
+fi
+
+exit "$rc"
