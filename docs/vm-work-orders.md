@@ -105,7 +105,7 @@ GUEST_USER=dev
 GUEST_SHELL=/bin/zsh
 GUEST_UFW=false
 GUEST_SWAP_GB=2
-GUEST_TIMEZONE=Etc/UTC
+GUEST_TIMEZONE=America/Los_Angeles   # PST/PDT
 
 # ---- Toolchain ----
 NODE_MAJOR=22
@@ -202,6 +202,7 @@ This flow is a Phase 2 deliverable and a Phase 2 DoD item.
 | Swap | Enabled, 2 GB file | A VPS has swap; absence changes OOM behavior |
 | Persistent journald | Enabled | `Storage=persistent` |
 | Unattended upgrades | Enabled, security only, no auto-reboot | — |
+| Timezone | `America/Los_Angeles` (PST/PDT) | User decision. The IANA zone, not a literal `PST`, so DST transitions are handled. **Changes from legacy**, which runs `Etc/UTC`. |
 | Timesync | `systemd-timesyncd` + `hv_utils` | Plan D13 |
 | Tailnet names | One node + N Tailscale Services (plan D15) | Not one `tailscaled` per name |
 | Tailnet registry | `vm/guest/tailnet.d/<name>.conf`, git-tracked | A name not in the registry does not survive a rebuild |
@@ -258,7 +259,7 @@ Two obligations follow:
 | Backup retention | 7 days + labeled safety backups (matches legacy). Assumes work is also pushed to git remotes; the archive is depth, not the only copy. |
 | Backup destination | `D:/vibebox-backups` — a **different physical drive** from the VM disk on `C:`, so a drive failure does not take both |
 | Soak duration (Phase 6) | 7 consecutive days, ≥3 host reboots, ≥5 sleep/resume cycles, ≥1 full rebuild |
-| Post-resume clock tolerance | ≤2 s offset, measured 60 s after resume |
+| Post-resume clock tolerance | ≤2 s offset, measured 60 s after resume. Compare in UTC; a local-zone comparison will read a DST transition as an 8-hour failure. |
 | Service readiness timeout | 90 s from boot to all-green `vibebox status` |
 | Rollback window (Phase 8→9) | 30 days, confirmed at Gate B |
 | Compatibility repo suite | Agent proposes candidates at Gate A; user picks |
