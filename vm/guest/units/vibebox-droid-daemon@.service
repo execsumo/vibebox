@@ -1,0 +1,22 @@
+[Unit]
+Description=Factory Droid daemon for %i
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/usr/local/bin/droid
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+WorkingDirectory=/home/%i
+Environment=HOME=/home/%i
+ExecStart=/usr/bin/env droid daemon --remote-access
+Restart=always
+RestartSec=5s
+KillMode=control-group
+NoNewPrivileges=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

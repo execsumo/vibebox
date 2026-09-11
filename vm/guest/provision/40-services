@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+CONFIG_FILE=${1:?configuration file is required}
+ROOT=${VIBEBOX_ROOT:-/opt/vibebox}
+# shellcheck source=/dev/null
+source "$ROOT/read-env.sh"
+read_vibebox_env "$CONFIG_FILE"
+
+install -d -m 0755 /etc/systemd/system
+for unit in "$ROOT"/units/*.service "$ROOT"/units/*.timer; do
+    [[ -f "$unit" ]] || continue
+    install -m 0644 "$unit" "/etc/systemd/system/$(basename "$unit")"
+done
+
+install -m 0755 "$ROOT/grow-disk.sh" /usr/local/sbin/vibebox-grow-disk
+install -m 0755 "$ROOT/backup-producer" /usr/local/sbin/vibebox-backup-producer
+install -m 0755 "$ROOT/tailnet-reconcile.sh" /usr/local/sbin/vibebox-tailnet-reconcile
+install -m 0755 "$ROOT/tailnet-status.sh" /usr/local/sbin/vibebox-tailnet-status
+install -d -m 0755 /etc/vibebox/tailnet.d
+find /etc/vibebox/tailnet.d -mindepth 1 -maxdepth 1 -type f -name '*.conf' -delete
+if [[ -d "$ROOT/tailnet.d" ]]; then
+    install -m 0644 "$ROOT"/tailnet.d/*.conf /etc/vibebox/tailnet.d/ 2>/dev/null || true
+fi
+install -m 0644 "$CONFIG_FILE" /etc/vibebox/vibebox.env
+systemctl daemon-reload
+
+systemctl enable --now vibebox-grow-disk.service
+systemctl enable --now vibebox-tailnet.service
+systemctl restart vibebox-tailnet.service
+
+if command -v hermes >/dev/null 2>&1; then
+    systemctl enable --now "vibebox-hermes-gateway@$GUEST_USER.service"
+else
+    printf 'optional service skipped: hermes is not installed\n' >&2
+fi
+
+if command -v droid >/dev/null 2>&1; then
+    systemctl enable --now "vibebox-droid-daemon@$GUEST_USER.service"
+else
+    printf 'optional service skipped: droid is not installed\n' >&2
+fi
+
+if [[ -x /opt/hermes-webui/ctl.sh ]]; then
+    systemctl enable --now "vibebox-hermes-webui@$GUEST_USER.service"
+else
+    printf 'optional service skipped: Hermes WebUI is not installed\n' >&2
+fi

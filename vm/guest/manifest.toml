@@ -1,0 +1,26 @@
+# Tool policy for the VM edition. Resolved versions are written to manifest.lock.
+
+[policy]
+node_major = 22
+update = "latest"
+
+[required]
+claude = "@anthropic-ai/claude-code"
+codex = "@openai/codex"
+bun = "bun"
+node = "nodejs"
+go = "golang-go"
+gh = "gh"
+docker = "docker-ce"
+
+[optional]
+agy = "antigravity"
+herdr = "herdr"
+rtk = "rtk"
+droid = "droid"
+hermes = "hermes"
+codeburn = "codeburn"
+pi = "@earendil-works/pi-coding-agent"
+codegraph = "@colbymchenry/codegraph"
+gws = "@googleworkspace/cli"
+docling = "docling"

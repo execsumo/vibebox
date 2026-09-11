@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+CONFIG_FILE=${1:?configuration file is required}
+ROOT=${VIBEBOX_ROOT:-/opt/vibebox}
+# shellcheck source=/dev/null
+source "$ROOT/read-env.sh"
+read_vibebox_env "$CONFIG_FILE"
+
+install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/"$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")".noarmor.gpg \
+    -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/"$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")".tailscale-keyring.list \
+    -o /etc/apt/sources.list.d/tailscale.list
+apt-get update
+apt-get install -y --no-install-recommends tailscale
+systemctl enable --now tailscaled
+
+if tailscale status --json >/dev/null 2>&1; then
+    printf 'tailscaled is installed; enrollment is intentionally separate\n'
+else
+    printf 'tailscaled is installed but not enrolled; run vibebox enroll tailscale\n'
+fi

@@ -6,3 +6,7 @@ Dockerfile text eol=lf
 *.yml text eol=lf
 # In-container commands (extensionless) and the shared dotfiles manifest.
 scripts/* text eol=lf
+vm/**/*.sh text eol=lf
+vm/guest/provision/* text eol=lf
+vm/guest/* text eol=lf
+vm/conformance/lib.sh text eol=lf
