@@ -202,6 +202,9 @@ This flow is a Phase 2 deliverable and a Phase 2 DoD item.
 | Persistent journald | Enabled | `Storage=persistent` |
 | Unattended upgrades | Enabled, security only, no auto-reboot | — |
 | Timesync | `systemd-timesyncd` + `hv_utils` | Plan D13 |
+| Tailnet names | One node + N Tailscale Services (plan D15) | Not one `tailscaled` per name |
+| Tailnet registry | `vm/guest/tailnet.d/<name>.conf`, git-tracked | A name not in the registry does not survive a rebuild |
+| Primary node mode | Kernel TUN (`tailscale0`) | Matches legacy `TS_USERSPACE=false` for the SSH node |
 
 ### 2.4 Toolchain
 
@@ -288,6 +291,7 @@ vibebox backup   [-Name] [-Label <s>]
 vibebox restore  [-Name] -Archive <p> [-DryRun]
 vibebox conformance [-Name] [-Json]
 vibebox enroll   <tailscale|github|hermes>
+vibebox tailnet  <list|add|remove|apply>   # declarative tailnet names (D15)
 ```
 
 Exit codes — stable, because automation and the conformance harness depend on
@@ -323,6 +327,8 @@ Rules:
              "tailscale": { "state": "Running", "name": "vibebox-vm", "ip": "100.x.x.x" } },
   "clock": { "offsetSec": 0.3, "synced": true },
   "gpu":   "none",
+  "tailnet": { "node": "vibebox", "services": [
+      { "name": "hermes", "target": "http://127.0.0.1:8080", "live": true, "inRegistry": true } ] },
   "services": [ { "unit": "docker.service", "active": true, "sub": "running" } ],
   "tools":  { "required": { "ok": 7, "missing": [] },
               "optional": { "ok": 9, "missing": ["docling"] } },
@@ -334,7 +340,36 @@ Rules:
 `mounts` must be `[]`. A non-empty `mounts` array sets `ok: false` and exits 5 —
 that is the drift detector the plan's security model depends on.
 
-### 3.3 The conformance harness
+### 3.3 The tailnet name registry
+
+Plan D15: one node, N Tailscale Services, declared in git.
+
+```ini
+# vm/guest/tailnet.d/hermes.conf
+SERVICE=hermes                      # -> hermes.<tailnet>.ts.net
+TARGET=http://127.0.0.1:8080
+PORT=443
+MODE=serve                          # serve | funnel
+```
+
+```
+vibebox tailnet list                       # registry vs live, side by side
+vibebox tailnet add <name> --target <url>  # writes the .conf, then applies
+vibebox tailnet remove <name>              # removes the .conf, then applies
+vibebox tailnet apply                      # reconcile
+```
+
+`apply` is a **reconcile, not an append**: diff `tailscale serve status --json`
+against the registry, add what is missing, withdraw what is orphaned, leave
+matches alone. Re-running it changes nothing. After `vibebox rebuild`, a single
+`apply` must restore every URL — that is the whole point of the registry, and
+it is a Phase 5 rebuild-test assertion.
+
+`vibebox tailnet`, never a `tailscale` wrapper. Plan D6 forbids shadowing the
+real CLI, and the fallback design (A12) is the exact scenario where a wrapper
+would be tempting.
+
+### 3.4 The conformance harness
 
 ```
 vm/conformance/
@@ -418,6 +453,11 @@ legacy container, same ID as before the commit.
 - A disposable instance named `vibebox-proof`, destroyed at phase end.
 - A recorded answer for risk **A11** (GPU, §2.5): the host's Windows edition,
   whether DDA is available, and whether Multipass exposes any GPU option.
+- A recorded answer for risk **A12** (tailnet, plan D15): whether Tailscale
+  Services is available on this tailnet, and the policy-file/grant syntax
+  required to advertise one. Verify against the admin console, not just the
+  CLI — `tailscale serve --service` exists in 1.102.3, which proves the client
+  supports it, not that this tailnet permits it.
 
 **Validation** — the plan's Phase 1 exit gate, plus:
 ```bash
@@ -440,6 +480,9 @@ vmconnect.exe localhost vibebox-proof      # must reach a login prompt
 - [ ] Canary test: a file at a known Windows path is unreadable from the guest.
 - [ ] The proof instance is destroyed and no Hyper-V artifact remains.
 - [ ] Every "no" answer names its fallback and its cost.
+- [ ] A12 recorded: Services available yes/no. If no, the fallback (one
+      userspace `tailscaled` per name) is confirmed workable **before** Phase 3
+      commits to a design.
 - [ ] A11 recorded with evidence:
       `(Get-ComputerInfo).WindowsProductName`, `Get-VMHostAssignableDevice`,
       and `multipass launch --help | Select-String -Pattern gpu`. If any of
@@ -504,6 +547,11 @@ Reboot Windows, confirm the alias still resolves (D10).
 - `vm/guest/manifest.toml` (policy) and generated `manifest.lock` (resolved).
 - `vm/guest/units/` — real unit files replacing `hermes-gateway`, `droid-daemon`,
   and the Hermes WebUI boot call.
+- `vm/guest/tailnet.d/` registry + `vibebox-tailnet.service` (oneshot,
+  idempotent reconcile) + `vibebox tailnet` per §3.3. Ships with `hermes.conf`
+  as the first entry.
+- The tailnet policy/grant requirement documented as an enrollment step — the
+  guest cannot self-authorize a service.
 - Guest policy from §2.3: swap, persistent journald, unattended-upgrades,
   timesync.
 
@@ -530,6 +578,12 @@ Then reboot and confirm all-green within the 90 s readiness budget.
       logging.
 - [ ] `which systemctl npm pip3 tailscale` all resolve to upstream paths.
 - [ ] Reboot → all-green `vibebox status` in ≤90 s with no host login.
+- [ ] `vibebox tailnet add` creates a reachable HTTPS name end to end, with a
+      valid auto-provisioned cert.
+- [ ] `vibebox tailnet apply` run twice changes nothing the second time.
+- [ ] A name removed from the registry is actually withdrawn from the tailnet
+      by `apply` — orphan removal works, not just addition.
+- [ ] `vibebox status` reports registry-vs-live drift for tailnet names.
 
 ---
 
@@ -590,6 +644,8 @@ match the pre-backup manifest.
 
 **DoD**
 - [ ] Destroy → rebuild → restore recovers 100% of synthetic data.
+- [ ] After rebuild, a single `vibebox tailnet apply` restores **every** tailnet
+      name from the registry, with working certs (§3.3).
 - [ ] Ownership maps by name; restore **refuses** on a detected UID mismatch it
       cannot resolve (test this deliberately).
 - [ ] Backup with a deliberately failing quiesce hook fails loudly, not
@@ -607,14 +663,16 @@ match the pre-backup manifest.
 ### Phase 6 — VPS conformance and synthetic soak
 
 **Deliverables**
-- The full `vm/conformance/` suite per §3.3, covering every row of the plan's
+- The full `vm/conformance/` suite per §3.4, covering every row of the plan's
   validation matrix.
 - `vm/docs/evidence/phase-6-conformance.md` and `-soak.md`.
 - The **Gate A report** (§5).
 
 **Validation** — run every §2.6 soak requirement, plus the VPS conformance
 checks using **unmodified upstream instructions**:
-Docker apt repo · Tailscale install · PostgreSQL from apt · nginx on :80/:443
+Docker apt repo · Tailscale install · a second tailnet name via `vibebox
+tailnet add`, HTTPS-reachable with a valid cert and surviving a reboot ·
+PostgreSQL from apt · nginx on :80/:443
 reachable over the tailnet · Node via NodeSource · Python venv · a hand-written
 unit with `Restart=on-failure` + `EnvironmentFile` proven to survive `kill -9` ·
 a timer that actually fires · `journalctl -u X -f` · `ss -tlnp` truthfulness ·

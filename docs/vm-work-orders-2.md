@@ -37,7 +37,9 @@ Do not start until **all** of these are true:
 - [ ] The user chose the **compatibility repo suite** (from the Gate A
       candidates).
 - [ ] The user decided the **SSH key question** (§3.2).
-- [ ] The user decided the **Hermes hostname question** (§3.4).
+- [ ] Tailscale **Services** confirmed available (risk A12), or the fallback
+      design confirmed, and the tailnet policy permits every name in the
+      registry (§3.4).
 - [ ] `vibebox status` is green and the conformance suite passes on a VM
       rebuilt within the last 7 days.
 
@@ -93,7 +95,7 @@ words, and confirm they have understood it. Do not assume they read it here.
 | Both boxes on the tailnet | VM keeps its temporary names (`vibebox-vm`, `hermes-vm`) for all of Phase 7 |
 | Both boxes authed to GitHub | Never run agents against the same repo *and* branch from both boxes concurrently |
 | Both boxes backing up | Separate destinations. Legacy keeps `./backups/<name>`; VM uses `BACKUP_DEST`. Never share a path. |
-| Both boxes serving Hermes | Only one may hold a given serve hostname. VM uses `hermes-vm` until cutover. |
+| Both boxes claiming a name | A tailnet name can only be held once. During Phase 7 every VM registry entry uses a `-vm` suffix (`hermes-vm`), swapped to the real name at cutover. |
 | Host resource pressure | VM + legacy container + WSL2 + Docker Desktop all resident. If the host degrades, reduce `VM_CPUS`/`VM_MEMORY` (§2.0 of part 1) — do **not** stop legacy. |
 
 ---
@@ -155,25 +157,35 @@ changed in legacy since then. The delta must:
 - never delete on the destination (no `--delete` semantics) — a delta that can
   remove files is a delta that can lose work.
 
-### 3.4 Hermes hostname — decision required at Gate A
+### 3.4 Tailnet names — node-to-service conversion
 
-Legacy runs **two** tailnet nodes: `vibebox` (SSH) and `hermes` (the WebUI, via
-a second Tailscale sidecar with `tailscale serve` terminating TLS). It needs two
-because a Tailscale node serves one hostname.
+Plan D15 settled the design: the VM runs **one node and advertises N Tailscale
+Services**, declared in the git-tracked registry (part 1 §3.3). The legacy
+approach — one Tailscale sidecar container per name — does not come across.
 
-The VM has one `tailscaled`, so `https://hermes.<tailnet>.ts.net` does not come
-across for free. Options:
+That makes cutover a **conversion, not a move**, and the distinction matters:
 
-| Option | Result |
-|---|---|
-| **Second `tailscaled` instance** (recommended if the URL matters) | A second systemd unit with its own `--statedir` and `--socket` joins as `hermes`. The URL is preserved exactly. Costs one more node and one more moving part. |
-| Serve on the `vibebox` node | Hermes moves to `https://vibebox.<tailnet>.ts.net/hermes` or a port. Simpler; **the user's bookmark breaks.** |
-| Drop the separate name | Hermes is reachable on the tailnet IP/port only. |
+| | Legacy | VM |
+|---|---|---|
+| `vibebox` | A node | A node (unchanged in kind) |
+| `hermes` | A **node** (second sidecar) | A **service** on the `vibebox` node |
+| Admin console | Both under *Machines* | `vibebox` under *Machines*, `hermes` under *Services* |
+| Adding a name | New sidecar container | `vibebox tailnet add <name>` |
 
-This must be decided before cutover, because the answer changes what Phase 8's
-identity handover has to do. It is a genuine gap in the original plan's
-component mapping, which said "native Tailscale Serve **or** a reverse proxy"
-without noting the one-hostname-per-node constraint.
+The DNS name and URL survive — `https://hermes.<tailnet>.ts.net` still works —
+but the object behind it changes. Two consequences for cutover:
+
+1. **Order still matters, once per name.** The legacy `hermes` node must be
+   removed before the VM advertises the `hermes` service, or the name is taken
+   and you get a silent suffix. Same trap as `vibebox-1`, multiplied by however
+   many names exist.
+2. **The tailnet policy file must permit the service before step 13 runs.**
+   This is an admin-console action the guest cannot perform. Do it at Gate B
+   preparation, not in the middle of the cutover window.
+
+Every name in the registry at cutover time gets its own row in the runbook.
+Today that is `hermes`; write the runbook against the registry, not against
+that one name.
 
 ### 3.5 Other parameters
 
@@ -253,7 +265,7 @@ Present the runbook below and get agreement on every row. Do not pick a date.
 |---|---|
 | Window | A specific date and time they choose. Not a default, not a Friday, not mid-sprint. |
 | Presence | Confirm they are reachable during the window |
-| Hermes hostname | §3.4 decision |
+| Tailnet names | The registry contents, and confirmation the tailnet policy permits each one (§3.4) |
 | Devices to update | Every machine with a `known_hosts` entry or saved SSH config for `vibebox` |
 | Abort trigger | Agreed **before** starting (§6.1) |
 | Rollback window | 30 days, confirmed |
@@ -275,33 +287,36 @@ verification fails, stop at that step and consult §6.
 | 1 | Full legacy backup, labeled `final-pre-cutover` | Archive exists, opens, size is plausible |
 | 2 | **Restore-test that archive** into a throwaway VM | Data present and correct. A backup that has not been restored is a hope, not a backup. |
 | 3 | VM conformance suite | Green |
-| 4 | Confirm the user still wants the window | Explicit yes |
+| 4 | Confirm the tailnet policy permits every registry name (§3.4) | Policy shows each service; this is an admin-console action, done **now** not mid-window |
+| 5 | Confirm the user still wants the window | Explicit yes |
 
 ### Cutover window
 
 | # | Step | Verify | Reversible? |
 |---|---|---|---|
-| 5 | Announce start; confirm the user has no unsaved work in legacy | Explicit yes | — |
-| 6 | Delta sync `-DryRun`, show the file list | User signs off | Yes |
-| 7 | Delta sync for real | Checksums match; no deletions occurred | Yes |
-| 8 | Stop the legacy container (`docker compose stop`) — **stop, never `down -v`** | Container stopped; **volumes intact** | Yes — `start` |
-| 9 | In the Tailscale admin console, remove or rename the legacy `vibebox` node | Node gone from the tailnet | Yes — re-auth |
-| 10 | Same for the legacy `hermes` node | Node gone | Yes |
-| 11 | Rename the VM instance and set its Tailscale hostname to `vibebox` | **Admin console shows `vibebox`, not `vibebox-1`** | Yes |
-| 12 | Apply the §3.4 Hermes decision | Hermes reachable at the agreed URL | Yes |
-| 13 | MagicDNS check from a **second device** | `ssh dev@vibebox` connects to the VM | — |
-| 14 | Update `known_hosts` on every device from the Gate B list | Each connects without a host-key warning | — |
-| 15 | Reboot the VM | All-green `vibebox status` within the readiness budget | — |
-| 16 | Restart the Windows host | VM autostarts; SSH and tailnet both work | — |
-| 17 | Promote `vm/README.md` to root; update docs to describe only the VM | Root README has no container instructions | Yes |
-| 18 | Rollback rehearsal: start legacy, confirm it runs, stop it again | Legacy started cleanly | — |
+| 6 | Announce start; confirm the user has no unsaved work in legacy | Explicit yes | — |
+| 7 | Delta sync `-DryRun`, show the file list | User signs off | Yes |
+| 8 | Delta sync for real | Checksums match; no deletions occurred | Yes |
+| 9 | Stop the legacy container (`docker compose stop`) — **stop, never `down -v`** | Container stopped; **volumes intact** | Yes — `start` |
+| 10 | In the Tailscale admin console, remove the legacy `vibebox` node | Node gone from the tailnet | Yes — re-auth |
+| 11 | Remove the legacy `hermes` node — **and one row per additional legacy name** | Each node gone | Yes |
+| 12 | Rename the VM instance and set its Tailscale hostname to `vibebox` | **Admin console shows `vibebox`, not `vibebox-1`** | Yes |
+| 13 | Drop the `-vm` suffix from every registry entry, then `vibebox tailnet apply` | `vibebox tailnet list` shows registry and live in agreement, no suffixes; each name resolves and serves a valid cert | Yes |
+| 14 | MagicDNS check from a **second device** | `ssh dev@vibebox` connects to the VM | — |
+| 15 | Update `known_hosts` on every device from the Gate B list | Each connects without a host-key warning | — |
+| 16 | Reboot the VM | All-green `vibebox status` within the readiness budget | — |
+| 17 | Restart the Windows host | VM autostarts; SSH and tailnet both work | — |
+| 18 | Promote `vm/README.md` to root; update docs to describe only the VM | Root README has no container instructions | Yes |
+| 19 | Rollback rehearsal: start legacy, confirm it runs, stop it again | Legacy started cleanly | — |
 
-**Step 11 is the one that bites.** If the legacy node still holds the name,
-Tailscale silently appends a suffix and every saved address keeps pointing at
-the stopped box. Check the admin console UI, not just `tailscale status` on the
-VM — the VM will cheerfully report the name it *asked* for.
+**Steps 11–13 are the ones that bite,** once per name. If a legacy node still
+holds a name, Tailscale silently appends a suffix and every saved address keeps
+pointing at the stopped box. Check the admin console UI, not just `tailscale
+status` or `vibebox tailnet list` — the VM will cheerfully report the name it
+*asked* for. Note that `hermes` moves from *Machines* to *Services* (§3.4), so
+look in the right place before concluding it is missing.
 
-**Step 8 is the one that ends the project if you get it wrong.** `docker
+**Step 9 is the one that ends the project if you get it wrong.** `docker
 compose down -v` destroys the home volume. The rollback path depends on those
 volumes surviving for 30 days. Use `stop`.
 
@@ -310,9 +325,11 @@ volumes surviving for 30 days. Use `stop`.
 - [ ] Final backup taken **and restore-tested** (step 2), not merely created.
 - [ ] Legacy stopped with volumes intact; `docker volume ls` still lists the
       home and ssh-key volumes.
-- [ ] Both legacy tailnet identities released before the VM claimed them.
+- [ ] **Every** legacy tailnet identity released before the VM claimed it —
+      one check per name, not just `vibebox` and `hermes`.
 - [ ] Admin console shows `vibebox` with no numeric suffix.
-- [ ] Hermes reachable at the agreed URL per §3.4.
+- [ ] Every registry name resolves, serves a valid cert, and carries no `-vm`
+      suffix; `vibebox tailnet list` shows registry and live in agreement.
 - [ ] SSH works from a second device, over both the tailnet and locally.
 - [ ] `known_hosts` updated everywhere on the Gate B device list.
 - [ ] VM survives its own reboot **and** a Windows host restart.
@@ -328,8 +345,9 @@ volumes surviving for 30 days. Use `stop`.
 
 Agreed at Gate B. Recommended defaults — any one of these aborts the cutover:
 
-- The VM is unreachable by SSH from a second device after step 13.
-- Tailscale identity cannot be claimed cleanly (stuck on `vibebox-1`).
+- The VM is unreachable by SSH from a second device after step 14.
+- Any tailnet identity cannot be claimed cleanly (stuck on a `-1` suffix), or
+  a service cannot be advertised because the tailnet policy rejects it.
 - The delta sync reports checksum mismatches it cannot resolve.
 - Any Tier 1 data is missing after the delta.
 - A compatibility repo that passed in Phase 7 now fails.
@@ -342,9 +360,10 @@ Within the 30-day window, rollback is straightforward because nothing was
 destroyed:
 
 1. Stop the VM (`vibebox stop`).
-2. Release the VM's `vibebox` / `hermes` Tailscale identities.
+2. Release the VM's node identity and withdraw every advertised service
+   (`vibebox tailnet` entries), so legacy can reclaim its names.
 3. Start legacy (`docker compose start`) — volumes are intact, so state is
-   exactly as it was at step 8.
+   exactly as it was at step 9.
 4. Re-authenticate legacy's Tailscale nodes if the keys were expired.
 5. Restore `known_hosts` entries on affected devices.
 6. Restore the root README from git.
@@ -410,7 +429,7 @@ and at least one successful real recovery from a VM backup.
 Part 1's ten stop conditions still apply. These are additional, and all of them
 are absolute:
 
-12. **Any write to legacy** outside Phase 8 step 8 — including "just restarting
+12. **Any write to legacy** outside Phase 8 step 9 — including "just restarting
     it to check something."
 13. **`docker compose down`, `down -v`, `volume rm`, or `image rm` against
     legacy** at any point before Phase 9 step 6.
@@ -434,7 +453,8 @@ Part 2 is complete when:
 - [ ] No container-era credential crossed the boundary; everything was
       re-enrolled.
 - [ ] `ssh vibebox` reaches the VM from every device the user uses.
-- [ ] Hermes is reachable at the agreed URL.
+- [ ] Every tailnet name in the registry resolves with a valid cert, and a
+      rebuild restores them all via one `vibebox tailnet apply`.
 - [ ] The VM survived a 30-day rollback window as the daily driver.
 - [ ] A real recovery from a VM backup has been performed at least once.
 - [ ] GPU work runs from `gpu/` on the host, unchanged in capability.

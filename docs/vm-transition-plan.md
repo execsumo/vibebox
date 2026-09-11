@@ -363,6 +363,42 @@ exists and has been proven to run a GPU job.
 This constraint is verified on the real host in Phase 1 rather than taken on
 faith; see risk A11.
 
+### D15. Multiple tailnet names come from Tailscale Services, not extra nodes
+
+Vibebox needs more than one tailnet name — today `vibebox` (SSH) and `hermes`
+(the WebUI), and more over time. The legacy edition achieves this by running
+one Tailscale **sidecar container per name**, because a Tailscale node serves
+one hostname.
+
+The VM does not repeat that. It runs **one node and advertises N services**:
+
+```
+tailscale serve --service=svc:hermes --https=443 http://127.0.0.1:8080
+```
+
+Each service gets its own virtual IP, its own MagicDNS name, and its own
+auto-provisioned TLS certificate, from a single `tailscaled`. Adding a name is
+a command, not a new daemon.
+
+Rejected alternative: multiple `tailscaled` instances, one per name, each with
+its own state directory, socket, and port. It works — it is what the legacy
+hermes sidecar does in userspace mode — but it costs a daemon and a tailnet
+machine per name, multiplies auth and expiry lifecycles, and forces
+`--socket=` onto every CLI invocation for non-primary nodes, which invites
+exactly the kind of wrapper D6 forbids. It is also the container-era topology
+re-expressed in systemd, which is what this migration exists to remove. It
+remains the documented fallback if Services is unavailable.
+
+Names must be **declarative and reproducible**: a registry in the repository,
+reconciled by an idempotent operation, so a rebuilt VM restores every URL from
+version control rather than from memory. A name that exists only because
+someone once ran a command is a name that will not survive a rebuild.
+
+Two things sit outside the guest and must be handled as explicit enrollment
+steps: services have to be declared in the tailnet policy file, and the node
+has to be granted permission to advertise them. The VM cannot self-serve
+either. See risk A12.
+
 ---
 
 ## Target architecture
@@ -385,7 +421,8 @@ Windows host
 |       |   |-- /home/ubuntu: rescue/admin account (Multipass-owned)
 |       |   `-- /home/dev:    persistent user data
 |       |
-|       |-- Tailscale identity and tailnet address  <- stable address
+|       |-- one Tailscale node identity  <- stable address
+|       |   `-- N advertised services (hermes, ...) each with its own name+cert
 |       `-- native Docker Engine
 |           `-- project-owned containers
 |
@@ -518,7 +555,7 @@ builds in `vm/`, and what happens to the legacy file at retirement.
 | `Dockerfile` | Decompose into cloud-init, `vm/guest/provision/`, and `manifest.toml` |
 | `docker-compose.yml` sandbox | No equivalent; Multipass/Hyper-V owns the machine |
 | Tailscale sidecar | Native `tailscaled.service` in the guest |
-| Hermes Tailscale sidecar | Native Tailscale Serve config or a normal reverse proxy in the guest |
+| Hermes Tailscale sidecar | No sidecar and no second node: a Tailscale **Service** advertised from the one guest node (D15) |
 | `scripts/entrypoint` | Nothing; systemd and standard boot own initialization |
 | `scripts/systemctl` | Nothing; `/usr/bin/systemctl` is real |
 | `scripts/hermes-gateway` | `vm/guest/units/` unit using upstream foreground mode |
@@ -867,6 +904,7 @@ cost rather than a surprise.
 | A9 | Mounts are absent by default and detectable | If undetectable, `vibebox status` cannot assert posture; downgrade the security claim in the docs to match reality |
 | A10 | Multipass's own SSH key handling doesn't conflict with the managed `dev` key | Keep the two paths fully separate: `ubuntu`/Multipass for rescue, `dev`/managed key for work |
 | A11 | GPU is genuinely unreachable from a Hyper-V Linux guest on this host's Windows edition (D14) | If it turns out to be reachable, that is good news — but treat enabling it as a separate, scoped decision, not an in-flight scope change |
+| A12 | Tailscale Services is available on this tailnet's plan, and the policy-file/grant syntax needed to advertise a service is understood (D15) | Fall back to one userspace `tailscaled` per name, driven by a systemd template unit from the same registry — the registry and `vibebox tailnet` surface stay identical either way |
 
 ---
 
@@ -1005,6 +1043,8 @@ absence of systemd will no longer be a Vibebox concept.
 | VM compromise reaches Windows over the network | No host integrations, least-privilege Tailscale policy, restrictive Windows firewall rules |
 | Full VM disk grows or corrupts | Monitor disk health, host-controlled user-data backups, prove clean rebuild recovery |
 | Migration imports container-era state | Default to selective data migration and fresh authentication |
+| A tailnet name exists only as a once-run command and is lost on rebuild | D15: names live in a git-tracked registry, reconciled idempotently |
+| Tailscale Services unavailable or plan-gated | A12 fallback to per-name userspace `tailscaled`, behind the same registry and command surface |
 | GPU is unavailable in the VM | D14: acknowledged up front, not discovered at cutover; GPU work stays on WSL2 and `vibebox status` reports no GPU |
 | Retiring `legacy/` silently destroys the GPU path | Phase 9 is blocked until a standalone `gpu/` project exists and has run a real GPU job |
 | Tool installation remains brittle | Separate required from optional tools, pin/record versions, fail required capabilities loudly, test clean builds regularly |
