@@ -175,6 +175,7 @@ This flow is a Phase 2 deliverable and a Phase 2 DoD item.
 | vCPUs | 4 | Matches legacy `SANDBOX_CPUS=4` |
 | Memory | 8 GB | Matches legacy `SANDBOX_MEM_LIMIT=8g` |
 | Disk | 128 GB, dynamically allocated | Grow-only (risk A5), so oversize at creation; real consumption is what's allocated |
+| VM disk location | Multipass default on `C:` | User decision; keeps create/destroy on the supported path |
 | Generation | Hyper-V Gen 2 | Plan security model |
 | Autostart on host boot | Enabled | Plan D12 |
 | Host stop action | ACPI shutdown, not Save | Plan D12 |
@@ -254,8 +255,8 @@ Two obligations follow:
 
 | Parameter | Value |
 |---|---|
-| Backup retention | 7 days + labeled safety backups (matches legacy) |
-| Backup destination | Host path outside the VHDX, agent proposes, user confirms at Gate A |
+| Backup retention | 7 days + labeled safety backups (matches legacy). Assumes work is also pushed to git remotes; the archive is depth, not the only copy. |
+| Backup destination | `D:/vibebox-backups` — a **different physical drive** from the VM disk on `C:`, so a drive failure does not take both |
 | Soak duration (Phase 6) | 7 consecutive days, ≥3 host reboots, ≥5 sleep/resume cycles, ≥1 full rebuild |
 | Post-resume clock tolerance | ≤2 s offset, measured 60 s after resume |
 | Service readiness timeout | 90 s from boot to all-green `vibebox status` |
@@ -536,6 +537,8 @@ Reboot Windows, confirm the alias still resolves (D10).
 - [ ] `config apply` on a running VM refuses without `-Restart`.
 - [ ] `status` reports drift when `vibebox.env` and the live VM disagree.
 - [ ] `doctor` fails on a key-shaped value in `vibebox.env`, naming it.
+- [ ] `doctor` warns if `BACKUP_DEST` resolves to the same physical drive as
+      the VM disk — that silently defeats the point of an external backup.
 
 ---
 

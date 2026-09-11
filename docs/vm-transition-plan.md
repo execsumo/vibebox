@@ -244,6 +244,14 @@ dotfiles, selected application state, and user-created data are backed up from
 the guest. Secrets and machine identities require explicit handling rather
 than being swept into a generic environment or archive unnoticed.
 
+"Explicit handling" means a deliberate, recorded decision per credential — not
+necessarily refusal. The user has accepted two documented exceptions (agent
+credentials and the SSH private key cross into the VM); see work-orders part 2
+§3.2. The requirement this decision actually encodes is that nothing crosses
+*unnoticed*, and that the resulting boundary is described accurately
+afterward. Machine identity — Tailscale state in particular — is still never
+duplicated, because that is a correctness constraint rather than a preference.
+
 ### D8. Keep application environments repository-owned
 
 Vibebox supplies a normal workstation and Docker host. Each application owns
@@ -632,12 +640,15 @@ supplement this for short-term rollback — they are excellent as a pre-upgrade
 undo — but they do not replace external user-data backups, because they live on
 the same disk and die with it.
 
-A clean migration is the default:
+A clean migration is the default. This project has accepted two explicit
+departures from it (work-orders part 2 §3.2), which is allowed precisely
+because they are written down:
 
 - Transfer project directories, dotfiles sources, shell history if desired,
   and explicitly selected application state.
 - Reinstall machine tools through provisioning.
-- Reauthenticate agents, GitHub, Tailscale, and other services.
+- Reauthenticate GitHub, Tailscale, and API-key-bearing services. (Agent
+  credentials are an accepted exception and come across with `~/.claude`.)
 - Generate a new SSH host identity and update the managed `known_hosts` entry.
 - Do not automatically import cached packages, old supervisors, `.vibebox`
   internals, machine binaries, or bulk environment files.
@@ -1054,24 +1065,28 @@ absence of systemd will no longer be a Vibebox concept.
 
 ## Open decisions for the implementation session
 
-These do not change the architectural direction but must be resolved during the
-proof and implementation work:
+Everything the user can decide in advance has been decided and recorded in the
+work-orders documents. What remains is **empirical** — it cannot be resolved by
+discussion, only by running Phase 1 against the real host:
 
-1. Whether Multipass exposes enough networking and security control to remain
-   the permanent host adapter, or whether direct Hyper-V should replace it.
-   (Answered by the adapter risk register in Phase 1.)
-2. Which current optional tools belong in the default guest versus an opt-in
-   feature profile.
-3. Which representative repositories form the compatibility test suite.
-4. The duration of the legacy rollback window — proposed at Gate B, decided by
-   the user.
-5. Whether the seven-day archive policy remains sufficient once the entire
-   workstation depends on external recovery.
-6. VM resource allocation (CPU, memory, disk), given that disk may be
-   grow-only and that the legacy box and WSL2 are concurrent tenants.
-7. Whether nested virtualization is enabled, and which projects would need it.
-8. Whether the guest runs a firewall (`ufw`) in addition to Tailscale ACLs, and
-   how that interacts with the rescue path.
+1. The twelve rows of the adapter risk register (A1–A12): Secure Boot template,
+   rescue console, autostart, stop action, disk growth, snapshots, cloud-init
+   reliability, nested-virt state, mount detectability, Multipass key handling,
+   GPU reachability, and Tailscale Services availability.
+2. Following from A1–A10: whether Multipass remains the permanent host adapter
+   or direct Hyper-V replaces it.
+
+Two items are deliberately deferred to a gate rather than being open questions:
+
+3. The compatibility repository suite — candidates proposed in the Gate A
+   report, chosen by the user then.
+4. The cutover window and rollback duration — agreed at Gate B.
+
+Previously open, now closed: optional-tool split (part 1 §2.4), VM resources
+(§2.1, adjustable via `vibebox.env`), `ufw` posture (§2.3), nested
+virtualization (§2.1, off), archive retention (§2.6), GPU (D14), multiple
+tailnet names (D15), storage layout and credential-migration exceptions
+(part 2 §3.2).
 
 ---
 
