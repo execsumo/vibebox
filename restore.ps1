@@ -1,223 +1,24 @@
-# PowerShell script to restore the sandbox home directory from a backup.
-# Usage:
-#   .\restore.ps1                 # Interactively select a backup
-#   .\restore.ps1 "before-llm"    # Restores '<sandbox>-backup-before-llm.tar.gz'
-#   .\restore.ps1 -RestoreIdentity # Also restores SSH host keys
-
 $ErrorActionPreference = "Stop"
 
-function Get-EnvValue {
-    param(
-        [string]$Name,
-        [string]$Default
-    )
+Write-Host "Legacy edition: restore.ps1 moved to legacy/; forwarding arguments."
 
-    $EnvPath = Join-Path $PSScriptRoot ".env"
-    if (Test-Path $EnvPath) {
-        foreach ($Line in Get-Content $EnvPath) {
-            if ($Line -match "^\s*$Name\s*=\s*(.+?)\s*$") {
-                return $Matches[1].Trim()
-            }
-        }
-    }
-
-    return $Default
+$LegacyDir = Join-Path $PSScriptRoot "legacy"
+$Target = Join-Path $LegacyDir "restore.ps1"
+if (-not (Test-Path -LiteralPath $Target -PathType Leaf)) {
+    throw "Legacy restore script was not found at $Target."
 }
 
-function Resolve-BackupName {
-    param(
-        [string]$SandboxName,
-        [string]$SpecifiedName
-    )
-
-    if ($SpecifiedName -match '[\\/]' -or $SpecifiedName -match '\.\.') {
-        throw "Backup name must not contain path separators or parent-directory references."
-    }
-
-    if ($SpecifiedName -like "$SandboxName-backup-*.tar.gz") {
-        return $SpecifiedName
-    }
-
-    if ($SpecifiedName -like "backup-*.tar.gz") {
-        return "$SandboxName-$SpecifiedName"
-    }
-
-    return "$SandboxName-backup-$SpecifiedName.tar.gz"
-}
-
-$SandboxName = Get-EnvValue -Name "SANDBOX_NAME" -Default "vibebox"
-$Username = Get-EnvValue -Name "SANDBOX_USERNAME" -Default "dev"
-# Home is either the named Docker volume (default) or, when SANDBOX_HOME_HOST_PATH
-# is set in .env, a host folder bind-mounted into the sandbox.
-$HostHomePath = Get-EnvValue -Name "SANDBOX_HOME_HOST_PATH" -Default ""
-$HomeMountSource = if ($HostHomePath) { $HostHomePath } else { "$SandboxName-home" }
-$BackupsDir = Join-Path $PSScriptRoot "backups\$SandboxName"
-$EscapedSandboxName = [regex]::Escape($SandboxName)
-
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "         Restoring Sandbox Home State         " -ForegroundColor Cyan
-Write-Host "==============================================" -ForegroundColor Cyan
-Write-Host "Sandbox: $SandboxName" -ForegroundColor Yellow
-Write-Host "Home:    $HomeMountSource" -ForegroundColor Yellow
-
-if (-not (Test-Path $BackupsDir)) {
-    Write-Host "No backups folder found at $BackupsDir." -ForegroundColor Yellow
-    Write-Host "Use .\backup.ps1 to create one first." -ForegroundColor Yellow
-    Write-Host "==============================================" -ForegroundColor Cyan
-    exit
-}
-
-$SelectedFile = $null
-$SpecifiedName = ""
-$RestoreIdentity = $false
-
-foreach ($arg in $args) {
-    if ($arg -eq "-RestoreIdentity") {
-        $RestoreIdentity = $true
-    } elseif (-not $SpecifiedName) {
-        $SpecifiedName = $arg
-    } else {
-        throw "Unknown argument: $arg"
-    }
-}
-
-if ($SpecifiedName) {
-    $Filename = Resolve-BackupName -SandboxName $SandboxName -SpecifiedName $SpecifiedName
-    if ($Filename -notmatch "^$EscapedSandboxName-backup-[a-zA-Z0-9_-]+\.tar\.gz$" -and
-        $Filename -notmatch "^$EscapedSandboxName-backup-\d{8}-\d{6}\.tar\.gz$") {
-        throw "Backup filename is not valid for this sandbox."
-    }
-
-    $SelectedFile = Join-Path $BackupsDir $Filename
-    if (-not (Test-Path $SelectedFile)) {
-        Write-Host "ERROR: Backup file not found at $SelectedFile" -ForegroundColor Red
-        Write-Host "==============================================" -ForegroundColor Cyan
-        exit
-    }
-} else {
-    $Backups = Get-ChildItem -Path $BackupsDir -Filter "$SandboxName-backup-*.tar.gz" | Sort-Object LastWriteTime -Descending
-
-    if ($Backups.Count -eq 0) {
-        Write-Host "No backups found in $BackupsDir." -ForegroundColor Yellow
-        Write-Host "Use .\backup.ps1 to create one first." -ForegroundColor Yellow
-        Write-Host "==============================================" -ForegroundColor Cyan
-        exit
-    }
-
-    Write-Host ""
-    Write-Host "Available backups for '$SandboxName' (newest first):" -ForegroundColor Yellow
-    for ($i = 0; $i -lt $Backups.Count; $i++) {
-        $Size = $Backups[$i].Length / 1MB
-        $Date = $Backups[$i].LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss")
-        Write-Host "  [$($i + 1)] $($Backups[$i].Name) ($($Size.ToString('F2')) MB - $Date)" -ForegroundColor Cyan
-    }
-
-    Write-Host ""
-    $Selection = Read-Host "Select a backup number to restore (1-$($Backups.Count)) or press Enter to cancel"
-
-    if (-not $Selection -or $Selection -match '[^0-9]') {
-        Write-Host "Cancelled." -ForegroundColor Yellow
-        Write-Host "==============================================" -ForegroundColor Cyan
-        exit
-    }
-
-    $Index = [int]$Selection - 1
-    if ($Index -lt 0 -or $Index -ge $Backups.Count) {
-        Write-Host "Invalid selection. Cancelled." -ForegroundColor Red
-        Write-Host "==============================================" -ForegroundColor Cyan
-        exit
-    }
-
-    $SelectedFile = $Backups[$Index].FullName
-}
-
-$Filename = Split-Path $SelectedFile -Leaf
-if ($Filename -notmatch "^$EscapedSandboxName-backup-[a-zA-Z0-9_-]+\.tar\.gz$" -and
-    $Filename -notmatch "^$EscapedSandboxName-backup-\d{8}-\d{6}\.tar\.gz$") {
-    throw "Backup filename is not valid for this sandbox."
-}
-
-$HasIdentity = $false
-$tarOutput = docker run --rm -v "${BackupsDir}:/backup:ro" alpine tar tf "/backup/$Filename" 2>$null
-if ($tarOutput -match "^ssh-identity/") {
-    $HasIdentity = $true
-}
-
-Write-Host ""
-Write-Host "WARNING: Restoring will completely overwrite the home directory for this sandbox." -ForegroundColor Red
-Write-Host "Target Backup: backups\$SandboxName\$Filename" -ForegroundColor Yellow
-$Confirm = Read-Host "Are you absolutely sure you want to restore? (y/N)"
-
-if ($Confirm -ne "y" -and $Confirm -ne "yes") {
-    Write-Host "Cancelled." -ForegroundColor Yellow
-    Write-Host "==============================================" -ForegroundColor Cyan
-    exit
-}
-
+$PreviousLocation = Get-Location
+$ExitCode = 0
 try {
-    Write-Host ""
-    Write-Host "1/4 Creating pre-restore safety backup..." -ForegroundColor Cyan
-    & (Join-Path $PSScriptRoot "backup.ps1") "pre-restore"
-
-    Write-Host "2/4 Stopping the active workspace container..." -ForegroundColor Cyan
-    docker compose stop sandbox
-
-    Write-Host "3/4 Wiping current active files, including hidden files, and extracting backup..." -ForegroundColor Cyan
-    # Mount home (named volume, or host folder when SANDBOX_HOME_HOST_PATH is set)
-    # at its real path under /restore-stage, wipe it, then extract. Archives are
-    # root-relative (begin with home/<user>/...).
-    $RestoreScript = @'
-set -e
-F="$1"
-U="$2"
-WIPE_IDENTITY="$3"
-HOME_DIR="/restore-stage/home/$U"
-find "$HOME_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-if [ "$WIPE_IDENTITY" = "1" ] && [ -d "/restore-stage/ssh-identity" ]; then
-    find "/restore-stage/ssh-identity" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-fi
-tar xzf "/backup/$F" -C /restore-stage
-'@
-    # Strip CR so the script is valid for busybox sh regardless of file line endings.
-    $RestoreScript = $RestoreScript -replace "`r", ""
-    
-    $DockerArgs = @(
-        "--rm",
-        "-v", "${HomeMountSource}:/restore-stage/home/${Username}",
-        "-v", "${BackupsDir}:/backup:ro"
-    )
-    $WipeIdentity = "0"
-    if ($RestoreIdentity -and $HasIdentity) {
-        $DockerArgs += "-v", "${SandboxName}-ssh-keys:/restore-stage/ssh-identity"
-        $WipeIdentity = "1"
+    Set-Location -LiteralPath $LegacyDir
+    & $Target @args
+    if ($null -ne $LASTEXITCODE) {
+        $ExitCode = $LASTEXITCODE
     }
-
-    $AllArgs = @("run") + $DockerArgs + @("alpine", "sh", "-c", $RestoreScript, "sh", $Filename, $Username, $WipeIdentity)
-    & docker @AllArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Docker run failed with exit code $LASTEXITCODE"
-    }
-
-    Write-Host "4/4 Restarting the workspace container..." -ForegroundColor Cyan
-    docker compose start sandbox
-
-    Write-Host ""
-    Write-Host "Restore completed successfully." -ForegroundColor Green
-    Write-Host "Sandbox '$SandboxName' has been rewound to: backups\$SandboxName\$Filename" -ForegroundColor Green
-    if ($RestoreIdentity) {
-        if ($HasIdentity) {
-            Write-Host "Notice: Host identity was replaced. Clients will warn once about a changed host key." -ForegroundColor Yellow
-        } else {
-            Write-Host "Notice: Archive does not contain ssh-identity/. Existing SSH host identity was kept." -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host "Notice: Existing SSH host identity was kept. Use -RestoreIdentity if migrating to a new host." -ForegroundColor Yellow
-    }
-} catch {
-    Write-Host ""
-    Write-Host "ERROR: Restore failed: $_" -ForegroundColor Red
-    Write-Host "Attempting to restart the container..." -ForegroundColor Yellow
-    docker compose start sandbox | Out-Null
+}
+finally {
+    Set-Location -LiteralPath $PreviousLocation
 }
 
-Write-Host "==============================================" -ForegroundColor Cyan
+exit $ExitCode

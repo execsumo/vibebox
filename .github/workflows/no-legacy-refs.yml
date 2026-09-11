@@ -1,0 +1,19 @@
+name: VM sibling boundary
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  no-legacy-refs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject legacy references under vm
+        shell: bash
+        run: |
+          set -euo pipefail
+          if rg -n --hidden --glob '!.git/**' 'legacy/' vm; then
+            echo "vm/ must not reference the frozen legacy edition" >&2
+            exit 1
+          fi
