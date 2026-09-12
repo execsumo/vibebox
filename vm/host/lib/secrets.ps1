@@ -20,7 +20,8 @@ function Invoke-VibeboxSecretInput {
         [Parameter(Mandatory)][string]$Secret
     )
 
-    $command = Get-Command multipass -ErrorAction Stop
+    $command = Get-VibeboxMultipassCommand
+    if ($null -eq $command) { throw "Multipass is not installed. Install Canonical Multipass before enrolling secrets." }
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $command.Source
     $startInfo.UseShellExecute = $false
@@ -109,13 +110,13 @@ function Invoke-VibeboxEnroll {
         }
         "github" {
             Write-Host "GitHub enrollment runs interactively inside the guest; no token is captured by the host."
-            $multipass = (Get-Command multipass -ErrorAction Stop).Source
+            $multipass = (Get-VibeboxMultipassCommand).Source
             & $multipass "exec" $Name "--" "sudo" "-u" $User "-H" "gh" "auth" "login"
             if ($LASTEXITCODE -ne 0) { throw "GitHub enrollment failed." }
         }
         "hermes" {
             Write-Host "Hermes enrollment runs interactively inside the guest; no credential is captured by the host."
-            $multipass = (Get-Command multipass -ErrorAction Stop).Source
+            $multipass = (Get-VibeboxMultipassCommand).Source
             & $multipass "exec" $Name "--" "sudo" "-u" $User "-H" "hermes" "login"
             if ($LASTEXITCODE -ne 0) { throw "Hermes enrollment failed." }
         }

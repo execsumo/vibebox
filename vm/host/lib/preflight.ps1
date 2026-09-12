@@ -48,7 +48,7 @@ function Get-VibeboxPreflightResults {
     })
     $null = $results.Add([pscustomobject]@{
         Id = "multipass"
-        Ok = ($null -ne (Get-Command multipass -ErrorAction SilentlyContinue))
+        Ok = ($null -ne (Get-VibeboxMultipassCommand))
         Detail = "Canonical Multipass is the supported lifecycle adapter."
     })
 

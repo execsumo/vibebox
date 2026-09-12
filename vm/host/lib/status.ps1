@@ -4,7 +4,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "lifecycle.ps1")
 
 function Get-VibeboxMultipassVersion {
-    if ($null -eq (Get-Command multipass -ErrorAction SilentlyContinue)) { return "" }
+    if ($null -eq (Get-VibeboxMultipassCommand)) { return "" }
     $result = Invoke-VibeboxMultipass -Arguments @("version") -AllowFailure
     if ($result.ExitCode -ne 0) { return "" }
     return (($result.Output | Select-Object -First 1) -as [string]).Trim()

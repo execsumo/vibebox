@@ -10,7 +10,7 @@ function Invoke-VibeboxMultipass {
         [switch]$AllowFailure
     )
 
-    $command = Get-Command multipass -ErrorAction SilentlyContinue
+    $command = Get-VibeboxMultipassCommand
     if ($null -eq $command) {
         throw "Multipass is not installed. Install Canonical Multipass before using the VM lifecycle."
     }
@@ -79,7 +79,7 @@ function Save-VibeboxInstanceMarker {
 function Get-VibeboxInstanceInfo {
     param([Parameter(Mandatory)][string]$Name)
 
-    if ($null -eq (Get-Command multipass -ErrorAction SilentlyContinue)) {
+    if ($null -eq (Get-VibeboxMultipassCommand)) {
         return $null
     }
     $result = Invoke-VibeboxMultipass -Arguments @("info", $Name, "--format", "json") -AllowFailure

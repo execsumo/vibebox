@@ -47,6 +47,28 @@ function Get-VibeboxPath {
     return $paths[$Name]
 }
 
+function Get-VibeboxMultipassCommand {
+    $command = Get-Command multipass -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $null = $candidates.Add((Join-Path $env:ProgramFiles "Multipass\bin\multipass.exe"))
+    }
+    $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) {
+        $null = $candidates.Add((Join-Path $programFilesX86 "Multipass\bin\multipass.exe"))
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return Get-Command -Name $candidate -ErrorAction Stop
+        }
+    }
+    return $null
+}
+
 function Read-VibeboxKeyValueFile {
     param([Parameter(Mandatory)][string]$Path)
 
