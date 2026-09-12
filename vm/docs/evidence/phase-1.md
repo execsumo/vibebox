@@ -10,12 +10,19 @@ PowerShell 7
 Git 2.55.0.windows.3
 OpenSSH_for_Windows_9.5p1
 Windows 10.0.22631
-Multipass: not installed
+Multipass 1.16.3+win
+Multipass daemon 1.16.3+win
+Host preflight blockers:
+- administrator: current shell is not elevated
+- hyperv: Hyper-V authorization is unavailable to this shell
+- hyperv-feature: feature query is unavailable without the required permission
+- resource-headroom-memory: 6.73 GB free; 12 GB required by the configured VM plus reserve
 ```
 
 No proof instance was created, no host reboot was requested, and no legacy
 container was touched. Therefore no row A1-A12 is claimed as verified, and
-the A2 console hard gate remains open. Install Multipass and run:
+the A2 console hard gate remains open. Re-run from an elevated PowerShell
+session after freeing sufficient memory:
 
 ```powershell
 .\vm\host\vibebox.ps1 doctor

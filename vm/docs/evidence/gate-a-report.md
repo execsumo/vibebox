@@ -4,9 +4,10 @@ Status: **blocked; Gate A has not been reached.**
 
 This report is intentionally an honest holding document. The VM repository
 implementation exists, but the host proof and synthetic soak have not run
-because Multipass is not installed in the current Windows environment. No
-real user data, credentials, dotfiles, history, or projects were read or
-moved.
+because the current shell cannot access Hyper-V with elevation and does not
+have enough free memory for the configured VM plus reserve. Multipass 1.16.3
+is installed and detected. No real user data, credentials, dotfiles, history,
+or projects were read or moved.
 
 ## 1. Conformance results
 
