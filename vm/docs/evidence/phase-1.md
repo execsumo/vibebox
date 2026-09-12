@@ -16,7 +16,7 @@ Host preflight blockers:
 - administrator: current shell is not elevated
 - hyperv: Hyper-V authorization is unavailable to this shell
 - hyperv-feature: feature query is unavailable without the required permission
-- resource-headroom-memory: 6.73 GB free; 12 GB required by the configured VM plus reserve
+- resource-headroom-memory: 5.94 GB free; 8 GB required by the 4 GB VM plus reserve
 ```
 
 No proof instance was created, no host reboot was requested, and no legacy

@@ -4,10 +4,10 @@ Status: **blocked; Gate A has not been reached.**
 
 This report is intentionally an honest holding document. The VM repository
 implementation exists, but the host proof and synthetic soak have not run
-because the current shell cannot access Hyper-V with elevation and does not
-have enough free memory for the configured VM plus reserve. Multipass 1.16.3
-is installed and detected. No real user data, credentials, dotfiles, history,
-or projects were read or moved.
+because the current shell cannot access Hyper-V with elevation and has 5.94 GB
+free against the 8 GB requirement for the configured 4 GB VM plus reserve.
+Multipass 1.16.3 is installed and detected. No real user data, credentials,
+dotfiles, history, or projects were read or moved.
 
 ## 1. Conformance results
 
