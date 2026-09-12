@@ -119,7 +119,7 @@ function Invoke-VibeboxConfigApply {
     if ($running) {
         # Reconciliation requires the Hyper-V VM to be Off even when the
         # configured ordinary stop action is Save.
-        Invoke-VibeboxMultipass -Arguments @("stop", "--type", "shutdown", $target) | Out-Null
+        Invoke-VibeboxMultipass -Arguments @("stop", $target) | Out-Null
         for ($attempt = 0; $attempt -lt 30; $attempt++) {
             $stopped = Get-VibeboxInstanceInfo -Name $target
             if ($null -ne $stopped -and $stopped.State -eq "STOPPED") { break }
@@ -132,11 +132,6 @@ function Invoke-VibeboxConfigApply {
 
     $vm = Get-VibeboxHyperVInstance -Name $target
     if ($null -ne $vm) {
-        $desiredMemory = ConvertTo-VibeboxBytes -Value $Config.Values.VM_MEMORY -Name "VM_MEMORY"
-        $currentMemory = [uint64]$vm.MemoryStartup
-        if ($currentMemory -ne $desiredMemory) {
-            Set-VMMemory -VM $vm -StartupBytes $desiredMemory
-        }
         if ([int]$vm.ProcessorCount -ne [int]$Config.Values.VM_CPUS) {
             Set-VMProcessor -VM $vm -Count ([int]$Config.Values.VM_CPUS)
         }

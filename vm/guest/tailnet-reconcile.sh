@@ -4,7 +4,17 @@ set -Eeuo pipefail
 
 registry_dir=${VIBEBOX_TAILNET_REGISTRY:-/etc/vibebox/tailnet.d}
 [[ -d "$registry_dir" ]] || exit 0
-if ! tailscale status --json >/dev/null 2>&1; then
+tailnet_status=$(tailscale status --json 2>/dev/null || true)
+if [[ -z "$tailnet_status" ]] ||
+    ! printf '%s' "$tailnet_status" | python3 -c '
+import json
+import sys
+try:
+    value = json.load(sys.stdin)
+except json.JSONDecodeError:
+    raise SystemExit(1)
+raise SystemExit(0 if value.get("BackendState") == "Running" else 1)
+'; then
     printf 'Tailscale is not enrolled; tailnet Services will reconcile after enrollment\n'
     exit 0
 fi

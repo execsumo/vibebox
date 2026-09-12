@@ -21,7 +21,7 @@ write_files:
       set -Eeuo pipefail
       for _ in $(seq 1 180); do
         if [[ -x /opt/vibebox/provision/provision.sh && -r /opt/vibebox/vibebox.env ]]; then
-          exec /opt/vibebox/provision/provision.sh
+          VIBEBOX_CONFIG_FILE=/opt/vibebox/vibebox.env exec /opt/vibebox/provision/provision.sh
         fi
         sleep 1
       done

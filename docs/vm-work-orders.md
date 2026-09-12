@@ -92,8 +92,11 @@ Precedence: **CLI flag > `vibebox.env` > built-in default.**
 VM_NAME=vibebox-vm
 UBUNTU_RELEASE=24.04
 VM_CPUS=4
-VM_MEMORY=8G
-VM_DISK=128G                  # grow-only; cannot be shrunk after create
+# Hyper-V dynamic memory: minimum / startup / maximum.
+VM_MEMORY_MIN=0.5G
+VM_MEMORY_STARTUP=2G
+VM_MEMORY=4G
+VM_DISK=32G                   # grow-only; cannot be shrunk after create
 
 # ---- Host behavior ----
 VM_AUTOSTART=true
@@ -131,7 +134,7 @@ ignores half its own settings is worse than no config file.
 
 | Setting | Applies | How |
 |---|---|---|
-| `VM_CPUS`, `VM_MEMORY` | VM **stopped** | `vibebox config apply` — refuses on a running VM unless `-Restart` |
+| `VM_CPUS`, `VM_MEMORY_MIN`, `VM_MEMORY_STARTUP`, `VM_MEMORY` | VM **stopped** | `vibebox config apply` — refuses on a running VM unless `-Restart` |
 | `VM_DISK` | VM stopped, **grow only** | `vibebox config apply` resizes the VHDX, then `growpart` + `resize2fs` in-guest on next boot. Shrink is refused with a clear message. |
 | `VM_AUTOSTART`, `VM_STOP_ACTION`, `VM_NESTED_VIRT` | VM stopped | `vibebox config apply` (Hyper-V properties) |
 | `VM_NAME`, `UBUNTU_RELEASE`, `GUEST_USER` | **Create-time only** | Changing requires `vibebox rebuild`; `config apply` says so rather than half-applying |
@@ -146,16 +149,17 @@ vibebox config diff              # declared vs actual VM state
 vibebox config apply [-Restart]  # reconcile what can be reconciled
 ```
 
-`vibebox status` reports config drift as a non-fatal warning: if `VM_MEMORY=16G`
-but the VM is running with 8 GB, say so and name the command that fixes it.
+`vibebox status` reports config drift as a non-fatal warning: if the configured
+dynamic-memory bounds differ from the Hyper-V VM, say so and name the command
+that fixes it.
 Silent drift is how a user ends up convinced they gave the VM more RAM than
 they did.
 
 **Resource-bump walkthrough** (the case the user actually cares about):
 
 ```powershell
-# edit vm/vibebox.env: VM_CPUS=8, VM_MEMORY=32G, VM_DISK=256G
-vibebox config diff                # shows all three deltas, flags disk as grow-only
+# edit vm/vibebox.env: VM_CPUS=8, VM_MEMORY_STARTUP=4G, VM_MEMORY=32G, VM_DISK=256G
+vibebox config diff                # shows resource deltas, flags disk as grow-only
 vibebox stop
 vibebox config apply
 vibebox start                      # growpart/resize2fs run on boot
@@ -173,8 +177,8 @@ This flow is a Phase 2 deliverable and a Phase 2 DoD item.
 | Ubuntu release | 24.04 LTS | Plan D4 |
 | Image source | Multipass `release:24.04` | Record the resolved image hash in evidence |
 | vCPUs | 4 | Matches legacy `SANDBOX_CPUS=4` |
-| Memory | 8 GB | Matches legacy `SANDBOX_MEM_LIMIT=8g` |
-| Disk | 128 GB, dynamically allocated | Grow-only (risk A5), so oversize at creation; real consumption is what's allocated |
+| Memory | 0.5 GB minimum, 2 GB startup, 4 GB maximum | Hyper-V Dynamic Memory bounds |
+| Disk | 32 GB, dynamically allocated | Grow-only (risk A5); real consumption is what's allocated |
 | VM disk location | Multipass default on `C:` | User decision; keeps create/destroy on the supported path |
 | Generation | Hyper-V Gen 2 | Plan security model |
 | Autostart on host boot | Enabled | Plan D12 |

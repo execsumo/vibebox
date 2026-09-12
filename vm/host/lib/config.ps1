@@ -4,6 +4,8 @@ $script:VibeboxConfigKeys = @(
     "VM_NAME",
     "UBUNTU_RELEASE",
     "VM_CPUS",
+    "VM_MEMORY_MIN",
+    "VM_MEMORY_STARTUP",
     "VM_MEMORY",
     "VM_DISK",
     "VM_AUTOSTART",
@@ -159,7 +161,15 @@ function Assert-VibeboxConfig {
     if (-not [int]::TryParse($v.VM_CPUS, [ref]$cpus) -or $cpus -lt 1) {
         throw "VM_CPUS must be a positive integer."
     }
-    $null = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY -Name "VM_MEMORY"
+    $minimumMemory = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY_MIN -Name "VM_MEMORY_MIN"
+    $startupMemory = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY_STARTUP -Name "VM_MEMORY_STARTUP"
+    $maximumMemory = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY -Name "VM_MEMORY"
+    if ($minimumMemory -gt $startupMemory) {
+        throw "VM_MEMORY_MIN cannot exceed VM_MEMORY_STARTUP."
+    }
+    if ($startupMemory -gt $maximumMemory) {
+        throw "VM_MEMORY_STARTUP cannot exceed VM_MEMORY."
+    }
     $null = ConvertTo-VibeboxSizeBytes -Value $v.VM_DISK -Name "VM_DISK"
     $null = ConvertTo-VibeboxBoolean -Value $v.VM_AUTOSTART -Name "VM_AUTOSTART"
     $null = ConvertTo-VibeboxBoolean -Value $v.VM_NESTED_VIRT -Name "VM_NESTED_VIRT"
@@ -198,6 +208,16 @@ function Assert-VibeboxConfig {
         if ($tool -notin $allowedOptional) {
             throw "TOOLS_OPTIONAL contains unsupported tool '$tool'."
         }
+    }
+}
+
+function Get-VibeboxMemoryBounds {
+    param([Parameter(Mandatory)]$Config)
+
+    return [pscustomobject]@{
+        MinimumBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY_MIN -Name "VM_MEMORY_MIN"
+        StartupBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY_STARTUP -Name "VM_MEMORY_STARTUP"
+        MaximumBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY -Name "VM_MEMORY"
     }
 }
 
@@ -290,9 +310,14 @@ function Get-VibeboxConfigOverridesFromArguments {
     }
     $overrides = @{}
     foreach ($argument in $map.Keys) {
-        if ($Arguments.ContainsKey($argument) -and $null -ne $Arguments[$argument]) {
-            $overrides[$map[$argument]] = $Arguments[$argument]
+        if (-not $Arguments.ContainsKey($argument)) {
+            continue
         }
+        $value = $Arguments[$argument]
+        if ($null -eq $value -or ([string]$value).Trim().Length -eq 0) {
+            continue
+        }
+        $overrides[$map[$argument]] = $value
     }
     return $overrides
 }

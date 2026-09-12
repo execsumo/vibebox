@@ -93,7 +93,7 @@ function Get-VibeboxPreflightResults {
     $null = $results.Add([pscustomobject]@{
         Id = "resource-headroom-memory"
         Ok = $memoryOk
-        Detail = "Free physical memory: $([math]::Round($freeMemory / 1GB, 2)) GB; requested VM plus concurrency reserve: $([math]::Round(($requestedMemory + $concurrentReserve) / 1GB, 2)) GB."
+        Detail = "Free physical memory: $([math]::Round($freeMemory / 1GB, 2)) GB; maximum dynamic VM memory plus concurrency reserve: $([math]::Round(($requestedMemory + $concurrentReserve) / 1GB, 2)) GB."
     })
 
     $root = Get-VibeboxRepoRoot

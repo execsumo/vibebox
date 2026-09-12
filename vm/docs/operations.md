@@ -1,8 +1,14 @@
 # VM operations
 
-The host entry point is `vm/host/vibebox.ps1`. Run it from PowerShell 7 on the
-Windows host. The guest remains usable with ordinary Ubuntu commands:
+The host entry point is `vm/host/vibebox.ps1`. Run it from **PowerShell 7
+(`pwsh`) as Administrator** on the Windows host. Windows PowerShell 5.1 is not
+supported. The guest remains usable with ordinary Ubuntu commands:
 `systemctl`, `journalctl`, `apt`, `ss`, and the native Docker CLI.
+
+Hyper-V identity checks require elevation for `create`, `start`, `stop`,
+`restart`, `config apply`, `destroy`, and `rebuild`. `VM_AUTOSTART=true`
+configures Hyper-V to start the VM automatically when Windows boots, so manual
+startup is normally unnecessary.
 
 ## Lifecycle
 
@@ -29,9 +35,11 @@ Edit the ignored `vm/vibebox.env`, then use:
 ```
 
 CPU, memory, and disk changes require a stopped VM. `-Restart` performs the
-stop/apply/start sequence. Disk growth is applied to the VHDX and the guest
-grows its root filesystem at boot. Disk shrink and create-time-only changes
-are refused.
+stop/apply/start sequence. Hyper-V Dynamic Memory uses
+`VM_MEMORY_MIN` / `VM_MEMORY_STARTUP` / `VM_MEMORY` as its minimum, startup,
+and maximum bounds. Disk growth is applied to the VHDX and the guest grows
+its root filesystem at boot. Disk shrink and create-time-only changes are
+refused.
 
 The shipped timezone is `America/Los_Angeles`. It is an IANA timezone and can
 be changed by provisioning.

@@ -11,7 +11,7 @@ if [[ -z "$root_disk" ]]; then
     exit 0
 fi
 
-root_partition_number=$(lsblk -no PARTNUM "/dev/$root_source")
+root_partition_number=$(lsblk -no PARTN "/dev/$root_source" | tr -d '[:space:]')
 if [[ -z "$root_partition_number" ]]; then
     printf 'root device has no partition number; no growth needed\n'
     exit 0

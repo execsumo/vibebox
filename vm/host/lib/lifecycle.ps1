@@ -7,6 +7,7 @@ Set-StrictMode -Version Latest
 function Invoke-VibeboxMultipass {
     param(
         [Parameter(Mandatory)][string[]]$Arguments,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 300,
         [switch]$AllowFailure
     )
 
@@ -14,8 +15,45 @@ function Invoke-VibeboxMultipass {
     if ($null -eq $command) {
         throw "Multipass is not installed. Install Canonical Multipass before using the VM lifecycle."
     }
-    $output = & $command.Source @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $command.Source
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        $null = $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start Multipass."
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            try {
+                $process.Kill($true)
+            } catch {
+                $process.Kill()
+            }
+            throw "multipass $($Arguments -join ' ') timed out after $TimeoutSeconds seconds."
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $output = @()
+        if (-not [string]::IsNullOrEmpty($stdout)) {
+            $output += $stdout -split "`r?`n" | Where-Object { $_ -ne "" }
+        }
+        if (-not [string]::IsNullOrEmpty($stderr)) {
+            $output += $stderr -split "`r?`n" | Where-Object { $_ -ne "" }
+        }
+        $exitCode = $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
     if ($exitCode -ne 0 -and -not $AllowFailure) {
         throw "multipass $($Arguments -join ' ') failed with exit code $exitCode`n$($output -join [Environment]::NewLine)"
     }
@@ -57,9 +95,12 @@ function Save-VibeboxInstanceMarker {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)]$Config,
-        [Parameter(Mandatory)][string]$ImageHash,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ImageHash,
         [ValidateSet("creating", "ready")][string]$State = "ready"
     )
+    if ($State -eq "ready" -and [string]::IsNullOrWhiteSpace($ImageHash)) {
+        throw "A ready Vibebox marker requires a non-empty image hash."
+    }
     $marker = [ordered]@{
         name = $Name
         createdBy = "vibebox"
@@ -91,24 +132,32 @@ function Get-VibeboxInstanceInfo {
     } catch {
         throw "Multipass returned invalid JSON for instance '$Name': $($_.Exception.Message)"
     }
-    $property = $json.info.PSObject.Properties | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+    $infoRoot = Get-VibeboxJsonProperty -Object $json -Name "info"
+    $property = if ($null -ne $infoRoot) {
+        $infoRoot.PSObject.Properties | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
+    } else {
+        $null
+    }
     if ($null -eq $property) {
         return $null
     }
     $info = $property.Value
-    $ip = @($info.ipv4 | Where-Object { $_ -and $_ -notmatch '^127\.' }) | Select-Object -First 1
+    $ip = @((Get-VibeboxJsonProperty -Object $info -Name "ipv4") |
+        Where-Object { $_ -and $_ -notmatch '^127\.' }) | Select-Object -First 1
     $diskTotal = $null
     $diskUsed = $null
-    if ($null -ne $info.disks) {
-        $disk = @($info.disks) | Select-Object -First 1
+    $disks = Get-VibeboxJsonProperty -Object $info -Name "disks"
+    if ($null -ne $disks) {
+        $disk = @($disks.PSObject.Properties | Select-Object -First 1).Value
         if ($null -ne $disk) {
-            $diskTotal = [string]$disk.total
-            $diskUsed = [string]$disk.used
+            $diskTotal = [string](Get-VibeboxJsonProperty -Object $disk -Name "total")
+            $diskUsed = [string](Get-VibeboxJsonProperty -Object $disk -Name "used")
         }
     }
     $mounts = [System.Collections.Generic.List[object]]::new()
-    if ($null -ne $info.mounts) {
-        foreach ($mount in $info.mounts.PSObject.Properties) {
+    $mountsObject = Get-VibeboxJsonProperty -Object $info -Name "mounts"
+    if ($null -ne $mountsObject) {
+        foreach ($mount in $mountsObject.PSObject.Properties) {
             $null = $mounts.Add([pscustomobject]@{
                 source = [string]$mount.Name
                 target = [string]$mount.Value
@@ -117,18 +166,34 @@ function Get-VibeboxInstanceInfo {
     }
     return [pscustomobject]@{
         Name = $Name
-        State = [string]$info.state
+        State = [string](Get-VibeboxJsonProperty -Object $info -Name "state")
         IPv4 = [string]$ip
-        ImageHash = [string]$info.image_hash
-        Release = [string]$info.release
-        Load = [string]$info.load
-        MemoryTotal = [string]$info.memory.total
-        MemoryUsed = [string]$info.memory.used
+        ImageHash = [string](Get-VibeboxJsonProperty -Object $info -Name "image_hash")
+        Release = [string](Get-VibeboxJsonProperty -Object $info -Name "release")
+        Load = [string](Get-VibeboxJsonProperty -Object $info -Name "load")
+        MemoryTotal = [string](Get-VibeboxJsonProperty -Object (Get-VibeboxJsonProperty -Object $info -Name "memory") -Name "total")
+        MemoryUsed = [string](Get-VibeboxJsonProperty -Object (Get-VibeboxJsonProperty -Object $info -Name "memory") -Name "used")
         DiskTotal = $diskTotal
         DiskUsed = $diskUsed
         Mounts = @($mounts)
         Raw = $info
     }
+}
+
+function Get-VibeboxJsonProperty {
+    param(
+        [AllowNull()]$Object,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        return $null
+    }
+    return $property.Value
 }
 
 function Assert-VibeboxManagedTarget {
@@ -138,6 +203,9 @@ function Assert-VibeboxManagedTarget {
         throw "Instance '$Name' is not managed by Vibebox. Refusing to operate on an unrelated instance."
     }
     $marker = Get-VibeboxInstanceMarker -Name $Name
+    if ([string]$marker.state -ne "ready") {
+        throw "Instance '$Name' is still being created. Refusing to operate on an unverified target."
+    }
     $info = Get-VibeboxInstanceInfo -Name $Name
     if ($null -eq $info) {
         throw "Managed instance '$Name' was not found."
@@ -190,6 +258,13 @@ function Set-VibeboxHyperVPolicy {
     if ($vm.State -ne "Off") {
         throw "Hyper-V policy changes require VM '$Name' to be stopped."
     }
+
+    $memory = Get-VibeboxMemoryBounds -Config $Config
+    Set-VMMemory -VM $vm `
+        -DynamicMemoryEnabled $true `
+        -MinimumBytes $memory.MinimumBytes `
+        -StartupBytes $memory.StartupBytes `
+        -MaximumBytes $memory.MaximumBytes
 
     $autoStart = ConvertTo-VibeboxBoolean -Value $Config.Values.VM_AUTOSTART -Name "VM_AUTOSTART"
     $startAction = if ($autoStart) { "Start" } else { "Nothing" }
@@ -275,7 +350,11 @@ function New-VibeboxGuestPayload {
 
 function Invoke-VibeboxGuestProvision {
     param([Parameter(Mandatory)][string]$Name)
-    Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "/opt/vibebox/provision/provision.sh") | Out-Null
+    Invoke-VibeboxMultipass -Arguments @(
+        "exec", $Name, "--", "sudo", "env",
+        "VIBEBOX_CONFIG_FILE=/opt/vibebox/vibebox.env",
+        "/opt/vibebox/provision/provision.sh"
+    ) | Out-Null
 }
 
 function Wait-VibeboxInstance {
@@ -302,9 +381,17 @@ function New-VibeboxInstance {
 
     $name = $Config.Values.VM_NAME
     if (Test-VibeboxManagedInstance -Name $name) {
+        $marker = Get-VibeboxInstanceMarker -Name $name
+        if ([string]$marker.state -eq "ready") {
+            if ([string]$marker.ubuntuRelease -ne [string]$Config.Values.UBUNTU_RELEASE) {
+                throw "UBUNTU_RELEASE is create-time-only for '$name'. Use vibebox rebuild to change it."
+            }
+            if ([string]$marker.guestUser -ne [string]$Config.Values.GUEST_USER) {
+                throw "GUEST_USER is create-time-only for '$name'. Use vibebox rebuild to change it."
+            }
+        }
         $existing = Get-VibeboxInstanceInfo -Name $name
         if ($null -eq $existing) {
-            $marker = Get-VibeboxInstanceMarker -Name $name
             if ($marker.state -eq "creating") {
                 # The launch may have been interrupted before Multipass created
                 # anything. Remove only our intent marker and retry normally.
@@ -314,6 +401,20 @@ function New-VibeboxInstance {
             }
         }
         if ($null -ne $existing -and (Get-VibeboxInstanceMarker -Name $name).state -eq "creating") {
+            $marker = Get-VibeboxInstanceMarker -Name $name
+            if ([string]$marker.ubuntuRelease -ne [string]$Config.Values.UBUNTU_RELEASE) {
+                throw "Interrupted creation of '$name' used Ubuntu $($marker.ubuntuRelease), but configuration requests $($Config.Values.UBUNTU_RELEASE). Remove the incomplete VM and marker before retrying."
+            }
+            if ([string]$marker.guestUser -ne [string]$Config.Values.GUEST_USER) {
+                throw "Interrupted creation of '$name' used guest user $($marker.guestUser), but configuration requests $($Config.Values.GUEST_USER). Remove the incomplete VM and marker before retrying."
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$marker.hyperVId)) {
+                throw "Interrupted creation of '$name' has no recorded Hyper-V identity. Refusing to adopt an unverified VM; remove the incomplete VM and marker before retrying."
+            }
+            $hyperv = Get-VibeboxHyperVInstance -Name $name
+            if ($null -eq $hyperv -or [string]$marker.hyperVId -ne [string]$hyperv.Id) {
+                throw "Interrupted creation of '$name' does not match its recorded Hyper-V identity. Remove the incomplete VM and marker before retrying."
+            }
             Write-Host "Resuming interrupted creation of '$name'."
             if ($existing.State -ne "RUNNING") {
                 Invoke-VibeboxMultipass -Arguments @("start", $name) | Out-Null
@@ -321,7 +422,7 @@ function New-VibeboxInstance {
             $existing = Wait-VibeboxInstance -Name $name -TimeoutSeconds ([int]$Config.Values.READINESS_TIMEOUT_SEC)
             New-VibeboxGuestPayload -Name $name -Config $Config
             Invoke-VibeboxGuestProvision -Name $name
-            Invoke-VibeboxMultipass -Arguments @("stop", "--type", "shutdown", $name) | Out-Null
+            Invoke-VibeboxMultipass -Arguments @("stop", $name) | Out-Null
             Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash $existing.ImageHash
             Set-VibeboxHyperVPolicy -Name $name -Config $Config | Out-Null
             return Start-VibeboxInstance -Name $name -Config $Config
@@ -355,15 +456,18 @@ function New-VibeboxInstance {
         "launch", "release:$($Config.Values.UBUNTU_RELEASE)",
         "--name", $name,
         "--cpus", $Config.Values.VM_CPUS,
-        "--memory", $Config.Values.VM_MEMORY,
+        "--memory", $Config.Values.VM_MEMORY_STARTUP,
         "--disk", $Config.Values.VM_DISK,
         "--cloud-init", $userDataPath
     )
     Invoke-VibeboxMultipass -Arguments $launchArgs | Out-Null
+    # Capture the Hyper-V identity immediately after launch. If provisioning
+    # is interrupted later, resume only from a marker bound to this VM.
+    Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash "" -State creating
     $info = Wait-VibeboxInstance -Name $name -TimeoutSeconds ([int]$Config.Values.READINESS_TIMEOUT_SEC)
     New-VibeboxGuestPayload -Name $name -Config $Config
     Invoke-VibeboxGuestProvision -Name $name
-    Invoke-VibeboxMultipass -Arguments @("stop", "--type", "shutdown", $name) | Out-Null
+    Invoke-VibeboxMultipass -Arguments @("stop", $name) | Out-Null
     Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash $info.ImageHash
     Set-VibeboxHyperVPolicy -Name $name -Config $Config | Out-Null
     $info = Start-VibeboxInstance -Name $name -Config $Config
@@ -394,8 +498,8 @@ function Stop-VibeboxInstance {
         Write-Host "Instance '$Name' is already stopped."
         return $info
     }
-    $stopType = if ($Config.Values.VM_STOP_ACTION -eq "save") { "suspend" } else { "shutdown" }
-    Invoke-VibeboxMultipass -Arguments @("stop", "--type", $stopType, $Name) | Out-Null
+    $stopCommand = if ($Config.Values.VM_STOP_ACTION -eq "save") { "suspend" } else { "stop" }
+    Invoke-VibeboxMultipass -Arguments @($stopCommand, $Name) | Out-Null
     return (Get-VibeboxInstanceInfo -Name $Name)
 }
 

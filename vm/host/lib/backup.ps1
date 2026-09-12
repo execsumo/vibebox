@@ -192,7 +192,7 @@ rm -f '__VIBEBOX_ARCHIVE__'
         Write-Host "Restored $(($entries | Measure-Object).Count) archive entries into '$Name' as '$($Config.Values.GUEST_USER)'."
     } finally {
         if (-not $wasRunning) {
-            Invoke-VibeboxMultipass -Arguments @("stop", "--type", "shutdown", $Name) | Out-Null
+            Invoke-VibeboxMultipass -Arguments @("stop", $Name) | Out-Null
         }
     }
 }

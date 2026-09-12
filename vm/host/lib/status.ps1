@@ -33,11 +33,17 @@ function Get-VibeboxLiveResources {
 
     $cpu = $null
     $memoryGb = $null
+    $memoryMinGb = $null
+    $memoryMaxGb = $null
+    $dynamicMemory = $null
     $diskGb = $null
     $vm = Get-VibeboxHyperVInstance -Name $Name
     if ($null -ne $vm) {
         $cpu = [int]$vm.ProcessorCount
         $memoryGb = [math]::Round(([double]$vm.MemoryStartup / 1GB), 2)
+        $memoryMinGb = [math]::Round(([double]$vm.MemoryMinimum / 1GB), 2)
+        $memoryMaxGb = [math]::Round(([double]$vm.MemoryMaximum / 1GB), 2)
+        $dynamicMemory = [bool]$vm.DynamicMemoryEnabled
         $drive = @(Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue | Select-Object -First 1)
         if ($drive.Count -gt 0 -and $drive[0].Path) {
             $vhd = Get-VHD -Path $drive[0].Path -ErrorAction SilentlyContinue
@@ -49,7 +55,14 @@ function Get-VibeboxLiveResources {
     if ($null -eq $diskGb -and $Info.DiskTotal) {
         $diskGb = ConvertTo-VibeboxMemoryGb -Value $Info.DiskTotal
     }
-    return [pscustomobject]@{ Cpus = $cpu; MemoryGb = $memoryGb; DiskGb = $diskGb }
+    return [pscustomobject]@{
+        Cpus = $cpu
+        MemoryGb = $memoryGb
+        MemoryMinGb = $memoryMinGb
+        MemoryMaxGb = $memoryMaxGb
+        DynamicMemory = $dynamicMemory
+        DiskGb = $diskGb
+    }
 }
 
 function Get-VibeboxGuestStatus {
@@ -81,7 +94,14 @@ function Get-VibeboxStatus {
     $live = if ($null -ne $info) {
         Get-VibeboxLiveResources -Name $Name -Info $info
     } else {
-        [pscustomobject]@{ Cpus = $null; MemoryGb = $null; DiskGb = $null }
+        [pscustomobject]@{
+            Cpus = $null
+            MemoryGb = $null
+            MemoryMinGb = $null
+            MemoryMaxGb = $null
+            DynamicMemory = $null
+            DiskGb = $null
+        }
     }
     $guest = if ($state -eq "running") { Get-VibeboxGuestStatus -Name $Name } else { $null }
     $mounts = @()
@@ -99,10 +119,21 @@ function Get-VibeboxStatus {
     if ($null -ne $live.Cpus -and [int]$live.Cpus -ne [int]$Config.Values.VM_CPUS) {
         $null = $drift.Add("CPU configured as $($Config.Values.VM_CPUS), live VM has $($live.Cpus)")
     }
-    $wantedMemory = ConvertTo-VibeboxMemoryGb -Value $Config.Values.VM_MEMORY
-    if ($null -ne $live.MemoryGb -and $null -ne $wantedMemory -and
-        [math]::Abs([double]$live.MemoryGb - [double]$wantedMemory) -gt 0.01) {
-        $null = $drift.Add("memory configured as $wantedMemory GB, live VM has $($live.MemoryGb) GB")
+    $wantedMemory = Get-VibeboxMemoryBounds -Config $Config
+    $wantedMinimumGb = [math]::Round(([double]$wantedMemory.MinimumBytes / 1GB), 2)
+    $wantedStartupGb = [math]::Round(([double]$wantedMemory.StartupBytes / 1GB), 2)
+    $wantedMaximumGb = [math]::Round(([double]$wantedMemory.MaximumBytes / 1GB), 2)
+    if ($null -ne $live.DynamicMemory -and -not $live.DynamicMemory) {
+        $null = $drift.Add("dynamic memory is disabled, expected enabled")
+    }
+    if ($null -ne $live.MemoryMinGb -and [math]::Abs([double]$live.MemoryMinGb - $wantedMinimumGb) -gt 0.01) {
+        $null = $drift.Add("memory minimum configured as $wantedMinimumGb GB, live VM has $($live.MemoryMinGb) GB")
+    }
+    if ($null -ne $live.MemoryGb -and [math]::Abs([double]$live.MemoryGb - $wantedStartupGb) -gt 0.01) {
+        $null = $drift.Add("memory startup configured as $wantedStartupGb GB, live VM has $($live.MemoryGb) GB")
+    }
+    if ($null -ne $live.MemoryMaxGb -and [math]::Abs([double]$live.MemoryMaxGb - $wantedMaximumGb) -gt 0.01) {
+        $null = $drift.Add("memory maximum configured as $wantedMaximumGb GB, live VM has $($live.MemoryMaxGb) GB")
     }
     $wantedDisk = ConvertTo-VibeboxMemoryGb -Value $Config.Values.VM_DISK
     if ($null -ne $live.DiskGb -and $null -ne $wantedDisk -and [double]$live.DiskGb -ne [double]$wantedDisk) {
@@ -167,6 +198,9 @@ function Get-VibeboxStatus {
         vm = [pscustomobject]@{
             cpus = $live.Cpus
             memoryGb = $live.MemoryGb
+            memoryMinGb = $live.MemoryMinGb
+            memoryMaxGb = $live.MemoryMaxGb
+            dynamicMemory = $live.DynamicMemory
             diskGb = $live.DiskGb
             diskUsedPct = if ($null -ne $guest) { $guest.diskUsedPct } else { $null }
             uptimeSec = if ($null -ne $guest) { $guest.uptimeSec } else { $null }
