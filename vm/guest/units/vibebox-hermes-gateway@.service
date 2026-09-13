@@ -1,4 +1,6 @@
 [Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
 Description=Hermes Agent gateway for %i
 After=network-online.target docker.service
 Wants=network-online.target

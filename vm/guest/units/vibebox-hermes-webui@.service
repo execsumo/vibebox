@@ -1,4 +1,6 @@
 [Unit]
+StartLimitIntervalSec=300
+StartLimitBurst=5
 Description=Hermes WebUI for %i
 After=network-online.target
 Wants=network-online.target

@@ -48,6 +48,11 @@ else
     printf 'optional service skipped: Hermes WebUI is not installed\n' >&2
 fi
 
+# Clear stale failure counters before touching units. A unit that hit its
+# start limit refuses `systemctl start` until it is reset, so without this a
+# re-provision that fixes the underlying problem still looks broken.
+systemctl reset-failed "vibebox-*" 2>/dev/null || true
+
 # Authorized keys declared in git, so they survive a rebuild. Installed into a
 # marker-delimited block that provisioning owns; anything the user added to the
 # file by hand sits outside the markers and is preserved, so re-provisioning
