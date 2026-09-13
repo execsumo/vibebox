@@ -10,3 +10,8 @@ vm/**/*.sh text eol=lf
 vm/guest/provision/* text eol=lf
 vm/guest/* text eol=lf
 vm/conformance/lib.sh text eol=lf
+# vm/guest/* is anchored and does not match subdirectories, so units,
+# authorized_keys.d and tailnet.d were checked out CRLF on Windows and shipped
+# to Linux that way. ** matches at any depth.
+vm/guest/** text eol=lf
+vm/conformance/** text eol=lf

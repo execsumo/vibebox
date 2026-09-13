@@ -143,6 +143,7 @@ echo "retargeted $retargeted absolute symlink(s) from /home/__SRC__"
 '@
     $managedKey = (Get-VibeboxSshKey).PublicKey
     $script = $script.Replace("__MANAGED_KEY__", $managedKey).
+    $script = $script -replace "`r`n", "`n"
         Replace("__ARCHIVE__", $remoteArchive).
         Replace("__EXCLUDES__", $excludeArgs).
         Replace("__SRC__", $SourceUser).
@@ -160,7 +161,7 @@ echo "entries: $(find "$dest" -mindepth 1 | wc -l)"
 echo "size: $(du -sh "$dest" | cut -f1)"
 echo "dangling symlinks: $(find "$dest" -xtype l | wc -l)"
 echo "not owned by __DST__: $(find "$dest" ! -user __DST__ | wc -l)"
-'@.Replace("__DST__", $targetUser)
+'@.Replace("__DST__", $targetUser) -replace "`r`n", "`n"
     $check = Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $verify) -TimeoutSeconds 1800 -AllowFailure
     if ($check.ExitCode -eq 0) {
         $check.Output | ForEach-Object { Write-Host "  $_" }

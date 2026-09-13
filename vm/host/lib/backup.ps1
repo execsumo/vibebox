@@ -35,18 +35,21 @@ function Install-VibeboxBackupKey {
     if ($User -notmatch '^[a-z_][a-z0-9_-]{0,31}$') { throw "Backup user is not a valid Linux login name." }
     $key = Get-VibeboxBackupKey -Name $Name
     $publicPath = Join-Path (Get-VibeboxPath -Name State) "backup\$Name.pub"
-    Set-Content -LiteralPath $publicPath -Value $key.PublicKey -Encoding ascii
+    [System.IO.File]::WriteAllText($publicPath, ($key.PublicKey.Trim() + "`n"), [System.Text.UTF8Encoding]::new($false))
     Invoke-VibeboxMultipass -Arguments @("transfer", $publicPath, "${Name}:/tmp/vibebox-backup.pub") | Out-Null
     $remote = @'
 set -Eeuo pipefail
 install -d -m 0700 -o __VIBEBOX_USER__ -g __VIBEBOX_USER__ /home/__VIBEBOX_USER__/.ssh
 touch /home/__VIBEBOX_USER__/.ssh/authorized_keys
 chmod 0600 /home/__VIBEBOX_USER__/.ssh/authorized_keys
-line='command="VIBEBOX_BACKUP_USER=__VIBEBOX_USER__ /usr/local/sbin/vibebox-backup-producer",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc '$(cat /tmp/vibebox-backup.pub)
+sed -i 's/$//' /home/__VIBEBOX_USER__/.ssh/authorized_keys
+pub=$(tr -d '' < /tmp/vibebox-backup.pub)
+line='command="VIBEBOX_BACKUP_USER=__VIBEBOX_USER__ /usr/local/sbin/vibebox-backup-producer",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc '"$pub"
 grep -Fqx "$line" /home/__VIBEBOX_USER__/.ssh/authorized_keys || printf '%s\n' "$line" >> /home/__VIBEBOX_USER__/.ssh/authorized_keys
 rm -f /tmp/vibebox-backup.pub
 '@
     $remote = $remote.Replace("__VIBEBOX_USER__", $User)
+    $remote = $remote -replace "`r`n", "`n"
     Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $remote) | Out-Null
     return $key
 }
@@ -228,6 +231,7 @@ fi
 rm -f '__VIBEBOX_ARCHIVE__'
 '@
         $extract = $extract.Replace("__VIBEBOX_SOURCE_USER__", $SourceUser).
+        $extract = $extract -replace "`r`n", "`n"
             Replace("__VIBEBOX_USER__", $targetUser).
             Replace("__VIBEBOX_ARCHIVE__", $remoteArchive)
         Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $extract) | Out-Null
