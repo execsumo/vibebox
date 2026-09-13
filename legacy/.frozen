@@ -1,0 +1,5 @@
+# Legacy edition freeze
+
+The legacy container is the current daily driver while the VM edition is
+validated. Do not add features or refactor this tree. Only security fixes and
+changes required to keep the existing edition runnable are allowed.

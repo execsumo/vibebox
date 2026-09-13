@@ -1,0 +1,25 @@
+[Unit]
+Description=Hermes WebUI for %i
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/hermes-webui/ctl.sh
+
+[Service]
+Type=forking
+User=%i
+Group=%i
+WorkingDirectory=/opt/hermes-webui
+Environment=HOME=/home/%i
+Environment=HERMES_WEBUI_HOST=0.0.0.0
+Environment=HERMES_WEBUI_PORT=8787
+EnvironmentFile=-/opt/hermes-webui/.env
+ExecStart=/opt/hermes-webui/ctl.sh start
+ExecStop=/opt/hermes-webui/ctl.sh stop
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

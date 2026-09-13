@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+CONFIG_FILE=${1:?configuration file is required}
+ROOT=${VIBEBOX_ROOT:-/opt/vibebox}
+# shellcheck source=/dev/null
+source "$ROOT/read-env.sh"
+read_vibebox_env "$CONFIG_FILE"
+
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+apt-get update
+apt_policy=()
+if [[ "${TOOLS_UPDATE_POLICY:-latest}" == "locked" ]]; then
+    # Do not advance already-installed system tools during a locked run.
+    # A clean guest has no prior package lock and is bootstrapped once.
+    apt_policy+=(--no-upgrade)
+fi
+apt-get install -y --no-install-recommends "${apt_policy[@]}" \
+    ca-certificates curl gnupg jq git sudo zsh tmux rsync \
+    build-essential pkg-config python3 python3-dev python3-pip python3-venv \
+    golang-go gh openssh-server unzip zip ripgrep fzf htop btop procps \
+    ffmpeg bubblewrap software-properties-common \
+    linux-tools-virtual cloud-guest-utils
+
+id "$GUEST_USER" >/dev/null 2>&1 || useradd --create-home --shell "$GUEST_SHELL" "$GUEST_USER"
+usermod --shell "$GUEST_SHELL" "$GUEST_USER"
+usermod --append --groups sudo "$GUEST_USER"
+install -d -m 0750 -o "$GUEST_USER" -g "$GUEST_USER" "/home/$GUEST_USER"
+printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$GUEST_USER" > "/etc/sudoers.d/$GUEST_USER"
+chmod 0440 "/etc/sudoers.d/$GUEST_USER"
+
+install -d -m 0755 /etc/vibebox
+install -m 0644 "$CONFIG_FILE" /etc/vibebox/vibebox.env
+printf '%s\n' "$GUEST_TIMEZONE" > /etc/timezone
+timedatectl set-timezone "$GUEST_TIMEZONE"
+
+install -d -m 0755 /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/vibebox.conf <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=1G
+EOF
+systemctl restart systemd-journald
+
+install -d -m 0755 /etc/apt/apt.conf.d
+cat > /etc/apt/apt.conf.d/52vibebox-unattended-upgrades <<'EOF'
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+apt-get install -y --no-install-recommends unattended-upgrades
+systemctl enable --now apt-daily.timer apt-daily-upgrade.timer
+
+systemctl enable --now systemd-timesyncd
+modprobe hv_utils 2>/dev/null || true
+systemctl enable --now ssh
+install -d -m 0755 /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/99-vibebox-hardening.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AllowTcpForwarding yes
+X11Forwarding no
+EOF
+sshd -t
+systemctl reload ssh
+
+# needrestart bounces services after apt work. If it restarts ssh.service while
+# the host is driving provisioning over multipass exec, the exec channel dies
+# and the client waits forever on a command that already succeeded in-guest.
+install -d -m 0755 /etc/needrestart/conf.d
+cat > /etc/needrestart/conf.d/99-vibebox.conf <<'EOF'
+# Never auto-restart sshd; it is the control channel for provisioning.
+$nrconf{override_rc} = { qr(^ssh\.service$) => 0 };
+EOF
+
+install -d -m 0755 /etc/vibebox/backup.d/pre /etc/vibebox/backup.d/post
+
+swap_file=/swapfile
+swap_entry="$swap_file none swap sw 0 0"
+if (( GUEST_SWAP_GB > 0 )); then
+    desired_swap_bytes=$((GUEST_SWAP_GB * 1024 * 1024 * 1024))
+    current_swap_bytes=0
+    if [[ -f "$swap_file" ]]; then
+        chmod 0600 "$swap_file"
+        current_swap_bytes=$(stat -c '%s' "$swap_file")
+    fi
+    if (( current_swap_bytes != desired_swap_bytes )); then
+        if swapon --show=NAME --noheadings | grep -Fxq "$swap_file"; then
+            swapoff "$swap_file"
+        fi
+        fallocate -l "$desired_swap_bytes" "$swap_file"
+        chmod 0600 "$swap_file"
+        mkswap "$swap_file"
+    fi
+    grep -qF "$swap_entry" /etc/fstab ||
+        printf '%s\n' "$swap_entry" >> /etc/fstab
+    swapon --all
+else
+    if grep -qF "$swap_entry" /etc/fstab; then
+        if swapon --show=NAME --noheadings | grep -Fxq "$swap_file"; then
+            swapoff "$swap_file"
+        fi
+        sed -i "\|^$swap_file none swap sw 0 0$|d" /etc/fstab
+        rm -f "$swap_file"
+    fi
+fi
+
+if [[ "$GUEST_UFW" == "true" ]]; then
+    apt-get install -y --no-install-recommends ufw
+    ufw --force reset
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow ssh
+    ufw --force enable
+else
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force disable || true
+    fi
+fi
+
+systemctl daemon-reload

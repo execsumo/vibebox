@@ -1,0 +1,31 @@
+#cloud-config
+users:
+  - default
+  - name: __VIBEBOX_GUEST_USER__
+    shell: __VIBEBOX_GUEST_SHELL__
+    groups: [sudo]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "__VIBEBOX_SSH_PUBLIC_KEY__"
+
+ssh_pwauth: false
+disable_root: true
+package_update: false
+write_files:
+  - path: /opt/vibebox/bootstrap.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      for _ in $(seq 1 180); do
+        if [[ -x /opt/vibebox/provision/provision.sh && -r /opt/vibebox/vibebox.env ]]; then
+          VIBEBOX_CONFIG_FILE=/opt/vibebox/vibebox.env exec /opt/vibebox/provision/provision.sh
+        fi
+        sleep 1
+      done
+      echo "Vibebox guest payload was not transferred before the bootstrap deadline" >&2
+      exit 1
+runcmd:
+  - [bash, -lc, "nohup /opt/vibebox/bootstrap.sh >>/var/log/vibebox-bootstrap.log 2>&1 </dev/null &"]

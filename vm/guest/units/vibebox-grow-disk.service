@@ -1,0 +1,12 @@
+[Unit]
+Description=Grow the Vibebox root filesystem after a disk increase
+After=local-fs.target
+ConditionPathExists=/usr/local/sbin/vibebox-grow-disk
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vibebox-grow-disk
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -7,3 +7,9 @@ backups/
 *.zip
 *.log
 .delegate/
+
+# VM host configuration and generated local evidence
+vm/vibebox.env
+vm/state/
+vm/backups/
+vm/docs/evidence/*.raw

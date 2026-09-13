@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+CONFIG_FILE=${1:?configuration file is required}
+ROOT=${VIBEBOX_ROOT:-/opt/vibebox}
+# shellcheck source=/dev/null
+source "$ROOT/read-env.sh"
+read_vibebox_env "$CONFIG_FILE"
+
+manifest_lock=${ROOT}/manifest.lock
+optional_tools=()
+IFS=',' read -r -a configured_optional <<< "${TOOLS_OPTIONAL:-}"
+for configured in "${configured_optional[@]}"; do
+    configured=${configured//[[:space:]]/}
+    [[ -n "$configured" ]] && optional_tools+=("$configured")
+done
+required_tools=(claude codex bun node go gh docker)
+
+npm_package_for() {
+    case "$1" in
+        claude) printf '%s' '@anthropic-ai/claude-code' ;;
+        codex) printf '%s' '@openai/codex' ;;
+        bun) printf '%s' 'bun' ;;
+        codeburn) printf '%s' 'codeburn' ;;
+        pi) printf '%s' '@earendil-works/pi-coding-agent' ;;
+        codegraph) printf '%s' '@colbymchenry/codegraph' ;;
+        gws) printf '%s' '@googleworkspace/cli' ;;
+        *) return 1 ;;
+    esac
+}
+
+locked_value() {
+    local tool=$1 value
+    value=$(awk -v key="$tool" '
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            line=$0
+            sub(/^[^"]*"/, "", line)
+            sub(/".*$/, "", line)
+            print line
+            exit
+        }
+    ' "$manifest_lock")
+    [[ -n "$value" && "$value" != "missing" ]] || return 1
+    printf '%s' "$value" | grep -oE '([0-9]+\.)+[0-9]+([+-][A-Za-z0-9.-]+)?' | head -n 1
+}
+
+install_locked_npm() {
+    local tool package version
+    for tool in claude codex bun; do
+        package=$(npm_package_for "$tool")
+        version=$(locked_value "$tool") || {
+            printf 'locked manifest has no usable version for required tool %s\n' "$tool" >&2
+            return 1
+        }
+        npm install --global --no-fund --no-audit "$package@$version"
+    done
+}
+
+install_latest_npm() {
+    npm install --global --no-fund --no-audit \
+        "@anthropic-ai/claude-code@latest" \
+        "@openai/codex@latest" \
+        "bun@latest"
+}
+
+locked_manifest=false
+if [[ "${TOOLS_UPDATE_POLICY}" == "locked" ]]; then
+    locked_manifest=true
+    for tool in claude codex bun; do
+        if ! locked_value "$tool" >/dev/null 2>&1; then
+            locked_manifest=false
+            break
+        fi
+    done
+fi
+
+enabled_optional() {
+    local wanted=$1
+    for tool in "${optional_tools[@]}"; do
+        [[ "$tool" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
+    gpg --batch --yes --dearmor -o /etc/apt/keyrings/nodesource.gpg
+chmod a+r /etc/apt/keyrings/nodesource.gpg
+cat > /etc/apt/sources.list.d/nodesource.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main
+EOF
+apt-get update
+apt_policy=()
+if [[ "${TOOLS_UPDATE_POLICY}" == "locked" ]]; then
+    apt_policy+=(--no-upgrade)
+fi
+apt-get install -y --no-install-recommends "${apt_policy[@]}" nodejs
+
+if [[ "$locked_manifest" == true ]]; then
+    install_locked_npm
+else
+    if [[ "${TOOLS_UPDATE_POLICY}" == "locked" ]]; then
+        printf 'no resolved lock exists; bootstrapping the locked manifest from current versions\n' >&2
+    fi
+    install_latest_npm
+fi
+
+if [[ "$locked_manifest" == true ]]; then
+    printf 'locked policy selected; optional tools remain at their recorded versions\n'
+    for tool in "${optional_tools[@]}"; do
+        if ! version=$(locked_value "$tool" 2>/dev/null); then
+            printf 'optional tool %s is not present in the locked manifest; skipping\n' "$tool" >&2
+            continue
+        fi
+        if package=$(npm_package_for "$tool" 2>/dev/null); then
+            npm install --global --no-fund --no-audit "$package@$version" || true
+        else
+            printf 'optional tool %s uses a non-npm installer; leaving the current installation unchanged\n' "$tool" >&2
+        fi
+    done
+else
+    npm install --global --no-fund --no-audit \
+        pyright typescript typescript-language-server vscode-langservers-extracted \
+        yaml-language-server bash-language-server @tailwindcss/language-server
+    # Optional installers are intentionally independent. A missing optional tool
+    # never hides a required-tool failure below.
+    enabled_optional codeburn && npm install --global --no-fund --no-audit codeburn || true
+    enabled_optional pi && npm install --global --no-fund --no-audit --ignore-scripts @earendil-works/pi-coding-agent || true
+    enabled_optional codegraph && npm install --global --no-fund --no-audit @colbymchenry/codegraph || true
+    enabled_optional gws && npm install --global --no-fund --no-audit @googleworkspace/cli || true
+
+    # These installers have no package-manager equivalent. They are best effort
+    # and are reported in the lock file rather than turning the base VM into a
+    # partially provisioned state.
+    enabled_optional herdr && curl -fsSL https://herdr.dev/install.sh | HERDR_INSTALL_DIR=/usr/local/bin sh || true
+    enabled_optional rtk && curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh |
+        RTK_INSTALL_DIR=/usr/local/bin sh || true
+    enabled_optional droid && curl -fsSL https://app.factory.ai/cli | sh || true
+    if enabled_optional droid && [[ -x /root/.local/bin/droid ]]; then
+        install -m 0755 /root/.local/bin/droid /usr/local/bin/droid
+    fi
+    enabled_optional agy && curl -fsSL https://antigravity.google/cli/install.sh | bash || true
+    if enabled_optional agy && [[ -x /root/.local/bin/agy ]]; then
+        install -m 0755 /root/.local/bin/agy /usr/local/bin/agy
+    fi
+    enabled_optional hermes && curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || true
+    if enabled_optional hermes && [[ -x /root/.local/bin/hermes ]]; then
+        install -m 0755 /root/.local/bin/hermes /usr/local/bin/hermes
+    fi
+
+    # Infisical is the secret store for this box, so it is installed from its
+    # own apt repository rather than depending on a binary that happened to be
+    # migrated. A rebuild without a restore must still be able to reach
+    # secrets, otherwise the box cannot bootstrap itself.
+    if enabled_optional infisical && ! command -v infisical >/dev/null 2>&1; then
+        curl -1sLf https://artifacts-cli.infisical.com/setup.deb.sh | bash             && apt-get update -qq             && apt-get install -y --no-install-recommends infisical             || printf 'optional: Infisical CLI install failed
+' >&2
+    fi
+
+    enabled_optional docling && python3 -m pip install --break-system-packages --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cpu docling pdftotext || true
+fi
+
+version_for() {
+    case "$1" in
+        go) go version ;;
+        *) "$1" --version ;;
+    esac
+}
+
+missing_required=()
+for tool in "${required_tools[@]}"; do
+    if ! command -v "$tool" >/dev/null 2>&1 || ! version_for "$tool" >/dev/null 2>&1; then
+        missing_required+=("$tool")
+    fi
+done
+if ((${#missing_required[@]})); then
+    printf 'required tools missing or unusable: %s\n' "${missing_required[*]}" >&2
+    exit 1
+fi
+
+missing_optional=()
+for tool in "${optional_tools[@]}"; do
+    if ! command -v "$tool" >/dev/null 2>&1 ||
+        ! version_for "$tool" >/dev/null 2>&1; then
+        missing_optional+=("$tool")
+    fi
+done
+
+{
+    printf '# Generated by /opt/vibebox/provision/30-tools\n'
+    printf 'generated_at = "%s"\n' "$(date --iso-8601=seconds)"
+    printf 'node_major = "%s"\n' "$(node --version)"
+    for tool in "${required_tools[@]}" "${optional_tools[@]}"; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            version_for "$tool" 2>/dev/null | head -n 1 | sed 's/"/\\"/g' |
+                while IFS= read -r version; do
+                    printf '%s = "%s"\n' "$tool" "$version"
+                done
+        else
+            printf '%s = "missing"\n' "$tool"
+        fi
+    done
+} > "$manifest_lock"
+chmod 0644 "$manifest_lock"
+
+if ((${#missing_optional[@]})); then
+    printf 'optional tools unavailable: %s\n' "${missing_optional[*]}" >&2
+fi

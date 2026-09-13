@@ -1,0 +1,13 @@
+[Unit]
+Description=Reconcile declared Vibebox Tailscale Services
+After=network-online.target tailscaled.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/sbin/vibebox-tailnet-reconcile
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vibebox-tailnet-reconcile
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
