@@ -72,6 +72,15 @@ EOF
 sshd -t
 systemctl reload ssh
 
+# needrestart bounces services after apt work. If it restarts ssh.service while
+# the host is driving provisioning over multipass exec, the exec channel dies
+# and the client waits forever on a command that already succeeded in-guest.
+install -d -m 0755 /etc/needrestart/conf.d
+cat > /etc/needrestart/conf.d/99-vibebox.conf <<'EOF'
+# Never auto-restart sshd; it is the control channel for provisioning.
+$nrconf{override_rc} = { qr(^ssh\.service$) => 0 };
+EOF
+
 install -d -m 0755 /etc/vibebox/backup.d/pre /etc/vibebox/backup.d/post
 
 swap_file=/swapfile

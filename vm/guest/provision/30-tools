@@ -148,6 +148,16 @@ else
     if enabled_optional hermes && [[ -x /root/.local/bin/hermes ]]; then
         install -m 0755 /root/.local/bin/hermes /usr/local/bin/hermes
     fi
+
+    # Infisical is the secret store for this box, so it is installed from its
+    # own apt repository rather than depending on a binary that happened to be
+    # migrated. A rebuild without a restore must still be able to reach
+    # secrets, otherwise the box cannot bootstrap itself.
+    if enabled_optional infisical && ! command -v infisical >/dev/null 2>&1; then
+        curl -1sLf https://artifacts-cli.infisical.com/setup.deb.sh | bash             && apt-get update -qq             && apt-get install -y --no-install-recommends infisical             || printf 'optional: Infisical CLI install failed
+' >&2
+    fi
+
     enabled_optional docling && python3 -m pip install --break-system-packages --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cpu docling pdftotext || true
 fi

@@ -65,3 +65,39 @@ boundary.
 When SSH is broken, stop using network credentials and launch
 `vibebox console`. The rescue password is the console credential. After
 repair, rotate any credential that may have been exposed.
+
+## Secrets: Infisical only
+
+The VM deliberately has no `.env`. The legacy box kept `TS_AUTHKEY`, a Hermes
+password and a dozen API keys in one `.env` and forwarded all of it into every
+shell — so every process, including anything an agent ran, inherited every
+credential. That is the habit this edition breaks.
+
+**Infisical is the secret store.** Nothing else is.
+
+- `vm/vibebox.env` holds non-secret configuration only. `vibebox doctor`
+  **fails** if it finds a key-shaped value there, naming the variable.
+- `vibebox enroll` handles only the credentials needed to *bootstrap* the box
+  into a usable state — the Tailscale auth key, GitHub login. These are
+  consumed at enrollment and not retained host-side.
+- Everything else — API keys for Tavily, OpenRouter, Groq, Cerebras, NVIDIA,
+  Factory, Warp, TMDB and so on — is fetched from Infisical at the point of
+  use. They are not written into a file, not exported globally, and not
+  migrated from the legacy `.env`.
+
+The Infisical CLI is installed by provisioning from its own apt repository,
+not carried across in the migration. That matters: a rebuilt VM with no
+restore must still be able to authenticate and pull secrets, or the box cannot
+bootstrap itself.
+
+`~/.infisical` and the local keyring migrate with the home directory, so an
+already-authenticated machine identity survives a restore. After a rebuild
+*without* a restore, re-authenticate with `infisical login`.
+
+### Why the legacy `.env` keys were not migrated
+
+They were deliberately left behind rather than copied. Carrying them would
+have recreated the exact pattern this design removes, and would have put
+long-lived third-party credentials into a file on a box whose rescue console
+is unproven. If any tool turns out to need one, fetch it from Infisical rather
+than re-adding it to a file.

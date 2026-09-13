@@ -5,10 +5,12 @@ The host entry point is `vm/host/vibebox.ps1`. Run it from **PowerShell 7
 supported. The guest remains usable with ordinary Ubuntu commands:
 `systemctl`, `journalctl`, `apt`, `ss`, and the native Docker CLI.
 
-Hyper-V identity checks require elevation for `create`, `start`, `stop`,
-`restart`, `config apply`, `destroy`, and `rebuild`. `VM_AUTOSTART=true`
-configures Hyper-V to start the VM automatically when Windows boots, so manual
-startup is normally unnecessary.
+No lifecycle command requires an elevated shell. Multipass drives Hyper-V
+through its own LocalSystem daemon, and Vibebox proves instance ownership from
+its own state marker plus the Multipass image hash rather than from `Get-VM`.
+
+Multipass restores instances that were running when the host shut down, so the
+VM normally comes back on its own after a Windows restart.
 
 ## Lifecycle
 
@@ -30,16 +32,15 @@ Edit the ignored `vm/vibebox.env`, then use:
 
 ```powershell
 .\vm\host\vibebox.ps1 config show
-.\vm\host\vibebox.ps1 config diff
-.\vm\host\vibebox.ps1 config apply
 ```
 
-CPU, memory, and disk changes require a stopped VM. `-Restart` performs the
-stop/apply/start sequence. Hyper-V Dynamic Memory uses
-`VM_MEMORY_MIN` / `VM_MEMORY_STARTUP` / `VM_MEMORY` as its minimum, startup,
-and maximum bounds. Disk growth is applied to the VHDX and the guest grows
-its root filesystem at boot. Disk shrink and create-time-only changes are
-refused.
+`VM_CPUS`, `VM_MEMORY`, `VM_DISK`, `UBUNTU_RELEASE`, `VM_NAME` and
+`GUEST_USER` are create-time settings. To change one, edit `vibebox.env`,
+then `vibebox rebuild -Confirm` and restore from a backup. `vibebox status`
+reports create-time drift, so the file and the live VM never disagree
+silently. Guest policy (`GUEST_UFW`, `GUEST_SWAP_GB`, `GUEST_TIMEZONE`,
+`NODE_MAJOR`, `TOOLS_*`) applies any time via the idempotent
+`vibebox provision`.
 
 The shipped timezone is `America/Los_Angeles`. It is an IANA timezone and can
 be changed by provisioning.
@@ -89,3 +90,85 @@ data only after inspecting a dry run.
 Inside the guest, use `systemctl --failed`, `journalctl -b`, `ss -tlnp`,
 `docker info`, `tailscale status`, and `df -h`. GPU is intentionally reported
 as `none`; GPU workloads stay on the Windows Docker Desktop/WSL2 path.
+
+## Migrating a legacy home directory
+
+`vibebox migrate` brings a home directory from the container-era box into the
+VM. It is read-only at the source: the input is a tarball the legacy box
+produced, and nothing is ever run against the legacy container.
+
+```powershell
+.\vm\host\vibebox.ps1 migrate -Archive <path\to\backup.tar.gz> -SourceUser dev -DryRun
+.\vm\host\vibebox.ps1 migrate -Archive <path\to\backup.tar.gz> -SourceUser dev
+```
+
+Use an archive the **legacy box itself** created, not a copy of the home
+directory taken from Windows. A Windows-side copy sits on NTFS and has already
+lost POSIX modes, executable bits and the `600` on private keys; the container's
+own backup preserves all of it.
+
+`-SourceUser` is the account the archive was made under. When it differs from
+`GUEST_USER`, the migration:
+
+1. extracts into a staging directory, never straight into `/`, so nothing can
+   land outside the tree and the result is inspectable first;
+2. copies into the existing home rather than replacing it, keeping the
+   provisioned account's shell and tool state;
+3. assigns ownership by name, never by numeric UID;
+4. **retargets absolute symlinks** from `/home/<source>/...` to
+   `/home/<target>/...`. Dotfile trees are full of these, and without this step
+   every one of them silently dangles.
+
+Regenerable caches (`.cache`, `.npm`, `.cargo/registry`, `.cargo/git`,
+`go/pkg`) are skipped by default; they usually dominate the archive and rebuild
+on first use. Pass `-IncludeCaches` to copy them anyway.
+
+The command reports the entry count, resulting size, how many symlinks it
+retargeted, and how many dangling symlinks remain. A non-zero dangling count
+means something referenced a path outside the home directory and needs a look.
+
+## Scheduled backups
+
+```powershell
+.\vm\host\vibebox.ps1 schedule enable -At 02:47
+.\vm\host\vibebox.ps1 schedule status
+.\vm\host\vibebox.ps1 schedule disable
+```
+
+`enable` registers a Windows scheduled task that runs `vibebox backup` daily.
+The backup is host-initiated by design — the host pulls through a restricted,
+forced-command SSH key — so the schedule lives on the host. A timer inside the
+guest could not reach the archive destination.
+
+The task runs as the current user at normal privilege. It deliberately does
+*not* use "run whether logged on or not", which would mean storing credentials.
+It is configured with `StartWhenAvailable` so a missed run (asleep, powered
+off) catches up rather than being skipped, and it is allowed to run on battery
+— a backup that only runs on mains power and never catches up is not a backup.
+
+If the VM is stopped when the schedule fires, `backup` starts it, takes the
+archive, and stops it again. A backup fires on a clock, not on the VM's state.
+
+### What is backed up
+
+Everything in the guest home **except** the paths listed in
+`vm/guest/regenerable.conf`. That file is the single source of truth: the
+guest-side backup producer reads it from `/opt/vibebox/regenerable.conf`, and
+host-side `vibebox migrate` reads it from the repository, so the two cannot
+drift apart.
+
+The test for putting something in that list: if the VM were rebuilt, would a
+normal provision or a single install command recreate it? If yes it is
+regenerable. If it holds anything you typed, it is not.
+
+On the legacy home this took the archive from 40.3 GB to 4.03 GB.
+
+### Checking that it is actually working
+
+`schedule status` reports the task state, last and next run, and — more
+usefully — the newest archive and its age. It warns when the newest archive is
+more than two days old, because a schedule that has never produced an archive
+is not a backup. Check this occasionally rather than assuming.
+
+Retention is `BACKUP_RETENTION_DAYS` (default 7). Archives whose label contains
+`-safety-` are never pruned.

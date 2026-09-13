@@ -16,12 +16,10 @@ function Get-VibeboxBytesFromSize {
     return [uint64][math]::Round(([double]$match.Groups[1].Value) * $multiplier)
 }
 
-function Test-VibeboxAdministrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
+# Multipass drives Hyper-V through its own daemon, which runs as a LocalSystem
+# service. Nothing vibebox does needs an elevated client, so doctor does not
+# ask for one. The checks below are exactly the conditions that can actually
+# stop a create/provision/destroy cycle.
 function Get-VibeboxPreflightResults {
     param([Parameter(Mandatory)]$Config)
 
@@ -30,11 +28,6 @@ function Get-VibeboxPreflightResults {
         Id = "powershell"
         Ok = ($PSVersionTable.PSVersion.Major -ge 7)
         Detail = "PowerShell $($PSVersionTable.PSVersion)"
-    })
-    $null = $results.Add([pscustomobject]@{
-        Id = "administrator"
-        Ok = (Test-VibeboxAdministrator)
-        Detail = "An elevated shell is required for Hyper-V configuration."
     })
     $null = $results.Add([pscustomobject]@{
         Id = "git"
@@ -46,104 +39,106 @@ function Get-VibeboxPreflightResults {
         Ok = ($null -ne (Get-Command ssh -ErrorAction SilentlyContinue))
         Detail = "OpenSSH client is required for the managed alias."
     })
+
+    $multipassCmd = Get-VibeboxMultipassCommand
     $null = $results.Add([pscustomobject]@{
         Id = "multipass"
-        Ok = ($null -ne (Get-VibeboxMultipassCommand))
+        Ok = ($null -ne $multipassCmd)
         Detail = "Canonical Multipass is the supported lifecycle adapter."
     })
 
-    $hyperv = $false
-    $hypervDetail = "Hyper-V cmdlets were not found."
-    $getVmHost = Get-Command Get-VMHost -ErrorAction SilentlyContinue
-    if ($null -ne $getVmHost) {
+    # The daemon can be listening and still be wedged; a hung multipassd looks
+    # exactly like a healthy one from the service list. Prove it answers.
+    $daemonOk = $false
+    $daemonDetail = "Multipass client was not found; daemon not probed."
+    if ($null -ne $multipassCmd) {
         try {
-            $hostInfo = Get-VMHost -ErrorAction Stop
-            $hyperv = $true
-            $hypervDetail = "Hyper-V host: $($hostInfo.ComputerName)"
+            $probe = Start-Job -ScriptBlock {
+                param($exe)
+                & $exe version 2>&1 | Out-String
+            } -ArgumentList $multipassCmd
+            if (Wait-Job -Job $probe -Timeout 20) {
+                $output = (Receive-Job -Job $probe) -join "`n"
+                if ($output -match 'multipassd\s+(\S+)') {
+                    $daemonOk = $true
+                    $daemonDetail = "multipassd responded: $($Matches[1])"
+                } else {
+                    $daemonDetail = "multipassd gave an unexpected reply: $($output.Trim())"
+                }
+            } else {
+                $daemonDetail = "multipassd did not answer within 20s. It is wedged; restart the Multipass service from an elevated shell: Restart-Service Multipass -Force (force-kill multipassd.exe first if the stop hangs)."
+            }
+            Remove-Job -Job $probe -Force -ErrorAction SilentlyContinue
         } catch {
-            $hypervDetail = "Hyper-V is present but unavailable: $($_.Exception.Message)"
+            $daemonDetail = "Could not probe multipassd: $($_.Exception.Message)"
         }
     }
-    $null = $results.Add([pscustomobject]@{ Id = "hyperv"; Ok = $hyperv; Detail = $hypervDetail })
+    $null = $results.Add([pscustomobject]@{ Id = "multipass-daemon"; Ok = $daemonOk; Detail = $daemonDetail })
 
-    $feature = $null
-    $getFeature = Get-Command Get-WindowsOptionalFeature -ErrorAction SilentlyContinue
-    if ($null -ne $getFeature) {
-        try {
-            $feature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -ErrorAction Stop
-        } catch {
-            $feature = $null
-        }
-    }
-    $featureOk = $null -ne $feature -and $feature.State -eq "Enabled"
+    # Hyper-V availability is proven by its services running, which any user can
+    # read. Get-VM / Get-WindowsOptionalFeature need elevation and would only
+    # re-answer the same question.
+    $vmms = Get-Service -Name vmms -ErrorAction SilentlyContinue
+    $vmcompute = Get-Service -Name vmcompute -ErrorAction SilentlyContinue
+    $hypervOk = ($null -ne $vmms -and $vmms.Status -eq 'Running') -and
+                ($null -ne $vmcompute -and $vmcompute.Status -eq 'Running')
     $null = $results.Add([pscustomobject]@{
-        Id = "hyperv-feature"
-        Ok = $featureOk
-        Detail = if ($null -ne $feature) { "Microsoft-Hyper-V state: $($feature.State)" } else { "Could not query Microsoft-Hyper-V." }
+        Id = "hyperv"
+        Ok = $hypervOk
+        Detail = if ($hypervOk) {
+            "Hyper-V services vmms and vmcompute are running."
+        } else {
+            "Hyper-V services are not both running (vmms=$($vmms.Status), vmcompute=$($vmcompute.Status)). Enable Hyper-V and reboot."
+        }
     })
 
-    $system = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+    # Headroom is advisory. Hyper-V dynamic memory starts the guest at its
+    # startup size and grows under pressure, so refusing to launch because the
+    # maximum is not free today would be wrong.
     $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
-    $totalMemory = if ($null -ne $system) { [uint64]$system.TotalPhysicalMemory } else { [uint64]0 }
     $freeMemory = if ($null -ne $os) { [uint64]$os.FreePhysicalMemory * 1KB } else { [uint64]0 }
-    $requestedMemory = Get-VibeboxBytesFromSize -Value $Config.Values.VM_MEMORY
-    # Reserve room for the still-running legacy container, WSL2, and the host.
-    $concurrentReserve = 4GB
-    $memoryOk = $freeMemory -ge ($requestedMemory + $concurrentReserve)
+    $startupMemory = Get-VibeboxBytesFromSize -Value $Config.Values.VM_MEMORY
+    $memoryTight = $freeMemory -lt $startupMemory
     $null = $results.Add([pscustomobject]@{
         Id = "resource-headroom-memory"
-        Ok = $memoryOk
-        Detail = "Free physical memory: $([math]::Round($freeMemory / 1GB, 2)) GB; maximum dynamic VM memory plus concurrency reserve: $([math]::Round(($requestedMemory + $concurrentReserve) / 1GB, 2)) GB."
+        Ok = $true
+        Warning = $memoryTight
+        Detail = "Free physical memory: $([math]::Round($freeMemory / 1GB, 2)) GB; VM memory: $([math]::Round($startupMemory / 1GB, 2)) GB."
     })
 
-    $root = Get-VibeboxRepoRoot
-    $drive = (Get-Item -LiteralPath $root).PSDrive
-    $freeDisk = if ($null -ne $drive) { [uint64]$drive.Free } else { [uint64]0 }
+    # Multipass stores instance disks on the system drive, not the repo drive.
+    # The disk is dynamically allocated, so this compares against real free
+    # space as a warning rather than a precondition.
+    $systemDrive = ($env:SystemDrive).TrimEnd(":")
+    $freeDisk = [uint64]0
+    try {
+        $psDrive = Get-PSDrive -Name $systemDrive -ErrorAction Stop
+        $freeDisk = [uint64]$psDrive.Free
+    } catch { $freeDisk = [uint64]0 }
     $requestedDisk = Get-VibeboxBytesFromSize -Value $Config.Values.VM_DISK
-    $diskOk = $freeDisk -ge $requestedDisk
+    $diskTight = $freeDisk -lt $requestedDisk
     $null = $results.Add([pscustomobject]@{
         Id = "resource-headroom-disk"
-        Ok = $diskOk
-        Detail = "Free host disk: $([math]::Round($freeDisk / 1GB, 2)) GB; configured VM disk: $([math]::Round($requestedDisk / 1GB, 2)) GB."
-    })
-
-    $null = $results.Add([pscustomobject]@{
-        Id = "nested-virtualization-policy"
         Ok = $true
-        Detail = "Nested virtualization requested: $($Config.Values.VM_NESTED_VIRT)."
+        Warning = $diskTight
+        Detail = "Free space on ${systemDrive}: $([math]::Round($freeDisk / 1GB, 2)) GB; configured VM disk (dynamically allocated): $([math]::Round($requestedDisk / 1GB, 2)) GB."
     })
 
     $backupPath = [Environment]::ExpandEnvironmentVariables($Config.Values.BACKUP_DEST)
     $backupQualifier = Split-Path -Path $backupPath -Qualifier
     $backupDrive = if ($backupQualifier) { $backupQualifier.TrimEnd(":") } else { "" }
-    $vmDiskDrive = "C"
-    $backupDiskNumber = $null
-    $vmDiskNumber = $null
-    try {
-        if ($backupDrive) {
-            $backupDiskNumber = (Get-Partition -DriveLetter $backupDrive -ErrorAction Stop | Get-Disk -ErrorAction Stop).Number
-        }
-        $vmDiskNumber = (Get-Partition -DriveLetter $vmDiskDrive -ErrorAction Stop | Get-Disk -ErrorAction Stop).Number
-    } catch {
-        # The warning is useful even in a non-elevated doctor invocation. A
-        # later elevated run can replace unknown with a verified answer.
-        $backupDiskNumber = $null
-        $vmDiskNumber = $null
-    }
-    $samePhysicalDrive = $null -ne $backupDiskNumber -and $backupDiskNumber -eq $vmDiskNumber
-    $physicalDriveKnown = $null -ne $backupDiskNumber -and $null -ne $vmDiskNumber
+    $sameLogicalDrive = $backupDrive -and ($backupDrive -ieq $systemDrive)
     $null = $results.Add([pscustomobject]@{
         Id = "backup-drive"
         Ok = $true
-        Warning = [bool]($samePhysicalDrive -or -not $physicalDriveKnown)
-        Detail = if ($samePhysicalDrive) {
-            "BACKUP_DEST resolves to $backupPath on the same physical disk as the default VM disk."
-        } elseif (-not $physicalDriveKnown) {
-            "Could not verify the physical disk for BACKUP_DEST=$backupPath; run doctor elevated."
+        Warning = [bool]$sameLogicalDrive
+        Detail = if ($sameLogicalDrive) {
+            "BACKUP_DEST ($backupPath) is on ${systemDrive}:, the same drive as the VM disk. A drive failure would take both."
         } else {
-            "BACKUP_DEST resolves to $backupPath on a different physical disk from the default VM disk."
+            "BACKUP_DEST resolves to $backupPath, separate from the VM disk on ${systemDrive}:."
         }
     })
+
     return @($results)
 }
 
@@ -155,7 +150,7 @@ function Assert-VibeboxPreflight {
 
     $results = Get-VibeboxPreflightResults -Config $Config
     $failures = @($results | Where-Object {
-        -not $_.Ok -and (-not ($AllowMissingMultipass -and $_.Id -eq "multipass"))
+        -not $_.Ok -and (-not ($AllowMissingMultipass -and $_.Id -in @("multipass", "multipass-daemon")))
     })
     foreach ($result in $results) {
         $warning = $result.PSObject.Properties.Name -contains "Warning" -and $result.Warning

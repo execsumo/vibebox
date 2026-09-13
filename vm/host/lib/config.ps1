@@ -4,18 +4,14 @@ $script:VibeboxConfigKeys = @(
     "VM_NAME",
     "UBUNTU_RELEASE",
     "VM_CPUS",
-    "VM_MEMORY_MIN",
-    "VM_MEMORY_STARTUP",
     "VM_MEMORY",
     "VM_DISK",
-    "VM_AUTOSTART",
-    "VM_STOP_ACTION",
-    "VM_NESTED_VIRT",
     "GUEST_USER",
     "GUEST_SHELL",
     "GUEST_UFW",
     "GUEST_SWAP_GB",
     "GUEST_TIMEZONE",
+    "TAILSCALE_TAG",
     "NODE_MAJOR",
     "TOOLS_OPTIONAL",
     "TOOLS_UPDATE_POLICY",
@@ -161,22 +157,9 @@ function Assert-VibeboxConfig {
     if (-not [int]::TryParse($v.VM_CPUS, [ref]$cpus) -or $cpus -lt 1) {
         throw "VM_CPUS must be a positive integer."
     }
-    $minimumMemory = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY_MIN -Name "VM_MEMORY_MIN"
-    $startupMemory = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY_STARTUP -Name "VM_MEMORY_STARTUP"
-    $maximumMemory = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY -Name "VM_MEMORY"
-    if ($minimumMemory -gt $startupMemory) {
-        throw "VM_MEMORY_MIN cannot exceed VM_MEMORY_STARTUP."
-    }
-    if ($startupMemory -gt $maximumMemory) {
-        throw "VM_MEMORY_STARTUP cannot exceed VM_MEMORY."
-    }
+    $null = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY -Name "VM_MEMORY"
     $null = ConvertTo-VibeboxSizeBytes -Value $v.VM_DISK -Name "VM_DISK"
-    $null = ConvertTo-VibeboxBoolean -Value $v.VM_AUTOSTART -Name "VM_AUTOSTART"
-    $null = ConvertTo-VibeboxBoolean -Value $v.VM_NESTED_VIRT -Name "VM_NESTED_VIRT"
     $null = ConvertTo-VibeboxBoolean -Value $v.GUEST_UFW -Name "GUEST_UFW"
-    if ($v.VM_STOP_ACTION -notin @("shutdown", "save")) {
-        throw "VM_STOP_ACTION must be shutdown or save."
-    }
     if ($v.GUEST_USER -notmatch '^[a-z_][a-z0-9_-]{0,31}$') {
         throw "GUEST_USER must be a valid Linux login name."
     }
@@ -203,21 +186,11 @@ function Assert-VibeboxConfig {
         throw "READINESS_TIMEOUT_SEC must be a positive integer."
     }
 
-    $allowedOptional = @("agy", "herdr", "rtk", "droid", "hermes", "codeburn", "pi", "codegraph", "gws", "docling")
+    $allowedOptional = @("agy", "herdr", "rtk", "droid", "hermes", "codeburn", "pi", "codegraph", "gws", "docling", "infisical")
     foreach ($tool in (ConvertTo-VibeboxList $v.TOOLS_OPTIONAL)) {
         if ($tool -notin $allowedOptional) {
             throw "TOOLS_OPTIONAL contains unsupported tool '$tool'."
         }
-    }
-}
-
-function Get-VibeboxMemoryBounds {
-    param([Parameter(Mandatory)]$Config)
-
-    return [pscustomobject]@{
-        MinimumBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY_MIN -Name "VM_MEMORY_MIN"
-        StartupBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY_STARTUP -Name "VM_MEMORY_STARTUP"
-        MaximumBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY -Name "VM_MEMORY"
     }
 }
 

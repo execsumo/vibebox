@@ -31,36 +31,18 @@ function ConvertTo-VibeboxMemoryGb {
 function Get-VibeboxLiveResources {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)]$Info)
 
+    # Read from Multipass rather than Hyper-V: it needs no elevation, and it
+    # reports the same units the configuration is written in.
     $cpu = $null
-    $memoryGb = $null
-    $memoryMinGb = $null
-    $memoryMaxGb = $null
-    $dynamicMemory = $null
-    $diskGb = $null
-    $vm = Get-VibeboxHyperVInstance -Name $Name
-    if ($null -ne $vm) {
-        $cpu = [int]$vm.ProcessorCount
-        $memoryGb = [math]::Round(([double]$vm.MemoryStartup / 1GB), 2)
-        $memoryMinGb = [math]::Round(([double]$vm.MemoryMinimum / 1GB), 2)
-        $memoryMaxGb = [math]::Round(([double]$vm.MemoryMaximum / 1GB), 2)
-        $dynamicMemory = [bool]$vm.DynamicMemoryEnabled
-        $drive = @(Get-VMHardDiskDrive -VM $vm -ErrorAction SilentlyContinue | Select-Object -First 1)
-        if ($drive.Count -gt 0 -and $drive[0].Path) {
-            $vhd = Get-VHD -Path $drive[0].Path -ErrorAction SilentlyContinue
-            if ($null -ne $vhd) {
-                $diskGb = [math]::Round(([double]$vhd.Size / 1GB), 2)
-            }
-        }
+    if ($null -ne $Info -and $null -ne $Info.Raw) {
+        $rawCpu = Get-VibeboxJsonProperty -Object $Info.Raw -Name "cpu_count"
+        if ($null -ne $rawCpu -and "$rawCpu" -ne "") { $cpu = [int]$rawCpu }
     }
-    if ($null -eq $diskGb -and $Info.DiskTotal) {
-        $diskGb = ConvertTo-VibeboxMemoryGb -Value $Info.DiskTotal
-    }
+    $memoryGb = if ($null -ne $Info) { ConvertTo-VibeboxMemoryGb -Value $Info.MemoryTotal } else { $null }
+    $diskGb = if ($null -ne $Info) { ConvertTo-VibeboxMemoryGb -Value $Info.DiskTotal } else { $null }
     return [pscustomobject]@{
         Cpus = $cpu
         MemoryGb = $memoryGb
-        MemoryMinGb = $memoryMinGb
-        MemoryMaxGb = $memoryMaxGb
-        DynamicMemory = $dynamicMemory
         DiskGb = $diskGb
     }
 }
@@ -97,9 +79,6 @@ function Get-VibeboxStatus {
         [pscustomobject]@{
             Cpus = $null
             MemoryGb = $null
-            MemoryMinGb = $null
-            MemoryMaxGb = $null
-            DynamicMemory = $null
             DiskGb = $null
         }
     }
@@ -115,34 +94,10 @@ function Get-VibeboxStatus {
         detail = "$($mounts.Count) Multipass mount(s) configured"
     })
 
+    # Only create-time settings can drift now. Resource sizes are fixed at
+    # create and reported straight from Multipass, so there is nothing to
+    # reconcile and no unit mismatch to misreport.
     $drift = [System.Collections.Generic.List[string]]::new()
-    if ($null -ne $live.Cpus -and [int]$live.Cpus -ne [int]$Config.Values.VM_CPUS) {
-        $null = $drift.Add("CPU configured as $($Config.Values.VM_CPUS), live VM has $($live.Cpus)")
-    }
-    $wantedMemory = Get-VibeboxMemoryBounds -Config $Config
-    $wantedMinimumGb = [math]::Round(([double]$wantedMemory.MinimumBytes / 1GB), 2)
-    $wantedStartupGb = [math]::Round(([double]$wantedMemory.StartupBytes / 1GB), 2)
-    $wantedMaximumGb = [math]::Round(([double]$wantedMemory.MaximumBytes / 1GB), 2)
-    if ($null -ne $live.DynamicMemory -and -not $live.DynamicMemory) {
-        $null = $drift.Add("dynamic memory is disabled, expected enabled")
-    }
-    if ($null -ne $live.MemoryMinGb -and [math]::Abs([double]$live.MemoryMinGb - $wantedMinimumGb) -gt 0.01) {
-        $null = $drift.Add("memory minimum configured as $wantedMinimumGb GB, live VM has $($live.MemoryMinGb) GB")
-    }
-    if ($null -ne $live.MemoryGb -and [math]::Abs([double]$live.MemoryGb - $wantedStartupGb) -gt 0.01) {
-        $null = $drift.Add("memory startup configured as $wantedStartupGb GB, live VM has $($live.MemoryGb) GB")
-    }
-    if ($null -ne $live.MemoryMaxGb -and [math]::Abs([double]$live.MemoryMaxGb - $wantedMaximumGb) -gt 0.01) {
-        $null = $drift.Add("memory maximum configured as $wantedMaximumGb GB, live VM has $($live.MemoryMaxGb) GB")
-    }
-    $wantedDisk = ConvertTo-VibeboxMemoryGb -Value $Config.Values.VM_DISK
-    if ($null -ne $live.DiskGb -and $null -ne $wantedDisk -and [double]$live.DiskGb -ne [double]$wantedDisk) {
-        if ([double]$live.DiskGb -lt [double]$wantedDisk) {
-            $null = $drift.Add("disk configured as $wantedDisk GB, live VHDX is $($live.DiskGb) GB (grow-only)")
-        } else {
-            $null = $drift.Add("disk configured as $wantedDisk GB, live VHDX is $($live.DiskGb) GB (shrink refused)")
-        }
-    }
     $marker = Get-VibeboxInstanceMarker -Name $Name
     if ($null -ne $marker -and [string]$marker.ubuntuRelease -ne [string]$Config.Values.UBUNTU_RELEASE) {
         $null = $drift.Add("Ubuntu release was created as $($marker.ubuntuRelease), configuration requests $($Config.Values.UBUNTU_RELEASE)")
@@ -178,7 +133,7 @@ function Get-VibeboxStatus {
         [pscustomobject]@{ id = "ssh"; ok = $sshReachable; detail = if ($sshReachable) { "SSH port is reachable" } else { "SSH port is not reachable" } }
         [pscustomobject]@{ id = "required-tools"; ok = ($requiredMissing.Count -eq 0); detail = if ($requiredMissing.Count) { "missing: $($requiredMissing -join ', ')" } else { "all required tools pass version checks" } }
         [pscustomobject]@{ id = "tailnet-registry"; ok = ($tailnetDrift.Count -eq 0); detail = if ($tailnetDrift.Count) { "drift: $($tailnetDrift -join ', ')" } else { "tailnet registry matches live Services" } }
-        [pscustomobject]@{ id = "tailscale"; ok = $tailscaleOk; detail = if ($tailscaleOk) { "Tailscale node is running" } else { "Tailscale node is not enrolled or running" } }
+        [pscustomobject]@{ id = "tailscale"; ok = $tailscaleOk; detail = if ($tailscaleOk) { "Tailscale node is running" } else { "Tailscale backend state: $(if ($null -ne $guest) { $guest.net.tailscale.state } else { 'unknown' }). Run vibebox enroll tailscale." } }
         [pscustomobject]@{ id = "core-services"; ok = ($failedCoreServices.Count -eq 0); detail = if ($failedCoreServices.Count) { "failed: $(($failedCoreServices | ForEach-Object { $_.unit }) -join ', ')" } else { "core services are active" } }
         [pscustomobject]@{ id = "clock"; ok = $clockOk; detail = if ($clockOk) { "clock is synchronized" } else { "clock is not synchronized within tolerance" } }
     )
@@ -198,9 +153,6 @@ function Get-VibeboxStatus {
         vm = [pscustomobject]@{
             cpus = $live.Cpus
             memoryGb = $live.MemoryGb
-            memoryMinGb = $live.MemoryMinGb
-            memoryMaxGb = $live.MemoryMaxGb
-            dynamicMemory = $live.DynamicMemory
             diskGb = $live.DiskGb
             diskUsedPct = if ($null -ne $guest) { $guest.diskUsedPct } else { $null }
             uptimeSec = if ($null -ne $guest) { $guest.uptimeSec } else { $null }

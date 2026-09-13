@@ -16,35 +16,58 @@ function ConvertTo-VibeboxPlainText {
 function Invoke-VibeboxSecretInput {
     param(
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string[]]$Arguments,
-        [Parameter(Mandatory)][string]$Secret
+        [Parameter(Mandatory)][string]$GuestCommand,
+        [Parameter(Mandatory)][string]$Secret,
+        [Parameter(Mandatory)][string]$Instance,
+        [Parameter(Mandatory)][string]$User
     )
 
-    $command = Get-VibeboxMultipassCommand
-    if ($null -eq $command) { throw "Multipass is not installed. Install Canonical Multipass before enrolling secrets." }
+    # Deliberately SSH, not `multipass exec`. Multipass does not forward stdin
+    # to the guest, so a secret piped through it is never read and the command
+    # blocks forever waiting on input that cannot arrive.
+    $info = Get-VibeboxInstanceInfo -Name $Instance
+    if ($null -eq $info -or [string]::IsNullOrWhiteSpace($info.IPv4)) {
+        throw "Instance '$Instance' has no reachable address for enrollment."
+    }
+    $key = Get-VibeboxSshKey
+    $ssh = Get-Command ssh -ErrorAction Stop
+
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $command.Source
+    $startInfo.FileName = $ssh.Source
     $startInfo.UseShellExecute = $false
     $startInfo.RedirectStandardInput = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
-    foreach ($argument in $Arguments) {
+    foreach ($argument in @(
+        "-i", $key.PrivateKey,
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "UserKnownHostsFile=$(Join-Path (Get-VibeboxPath -Name State) 'known-hosts')",
+        "$User@$($info.IPv4)",
+        "sudo -n bash -c '$GuestCommand'"
+    )) {
         $startInfo.ArgumentList.Add($argument)
     }
+
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
     $null = $process.Start()
-    $process.StandardInput.WriteLine($Secret)
+    $process.StandardInput.Write($Secret + "`n")
     $process.StandardInput.Close()
-    # Consume output so a verbose client cannot block on a full pipe. Never
-    # print either stream because it may echo enrollment context.
+    # Consume both streams so a verbose client cannot block on a full pipe, and
+    # never print either -- they can echo enrollment context.
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
+    if (-not $process.WaitForExit(120000)) {
+        try { $process.Kill($true) } catch { $process.Kill() }
+        throw "Secret-bearing operation for '$Name' timed out. No secret was written to the log."
+    }
     $null = $stdoutTask.Result
-    $null = $stderrTask.Result
+    $stderr = $stderrTask.Result
     if ($process.ExitCode -ne 0) {
-        throw "Secret-bearing operation for '$Name' failed with exit code $($process.ExitCode). No secret was written to the log."
+        # Surface the guest's own diagnostic, which does not contain the secret.
+        $detail = ($stderr -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join "; "
+        throw "Secret-bearing operation for '$Name' failed with exit code $($process.ExitCode). $detail"
     }
 }
 
@@ -69,19 +92,21 @@ function New-VibeboxPassword {
 }
 
 function Ensure-VibeboxRescuePassword {
-    param([Parameter(Mandatory)][string]$Name)
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$User
+    )
 
     $path = Get-VibeboxRescuePasswordPath -Name $Name
     if (Test-Path -LiteralPath $path -PathType Leaf) {
         return $null
     }
     $password = New-VibeboxPassword
-    Invoke-VibeboxSecretInput -Name "rescue-password" -Arguments @(
-        "exec", $Name, "--", "sudo", "chpasswd"
-    ) -Secret "ubuntu:$password"
+    Invoke-VibeboxSecretInput -Name "rescue-password" -GuestCommand 'read -r c; printf %s "$c" | tr -d "\r" | chpasswd' `
+        -Secret "ubuntu:$password" -Instance $Name -User $User
     Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "passwd", "--unlock", "ubuntu") | Out-Null
     Set-Content -LiteralPath $path -Value $password -NoNewline -Encoding utf8
-    & icacls.exe $path /inheritance:r /grant:r "$env:USERNAME:(R)" "SYSTEM:(F)" "Administrators:(F)" | Out-Null
+    & icacls.exe $path /inheritance:r /grant:r "${env:USERNAME}:(R)" "SYSTEM:(F)" "Administrators:(F)" | Out-Null
     Write-Host "Rescue password (displayed once): $password"
     Write-Host "Stored with a restricted ACL at $path"
     return $password
@@ -91,18 +116,37 @@ function Invoke-VibeboxEnroll {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$User,
-        [Parameter(Mandatory)][ValidateSet("tailscale", "github", "hermes")][string]$Provider
+        [Parameter(Mandatory)][ValidateSet("tailscale", "github", "hermes")][string]$Provider,
+        # Read the key from a KEY=VALUE file instead of prompting. The value is
+        # never printed, never echoed, and never written to a log -- it goes
+        # straight from the file into the guest's stdin.
+        [string]$KeyFrom,
+        [string]$Tag
     )
 
     switch ($Provider) {
         "tailscale" {
-            $secure = Read-Host "Paste the short-lived Tailscale auth key (input is not logged)" -AsSecureString
-            $secret = ConvertTo-VibeboxPlainText -SecureString $secure
+            if (-not [string]::IsNullOrWhiteSpace($KeyFrom)) {
+                $keyPath = (Resolve-Path -LiteralPath $KeyFrom -ErrorAction Stop).Path
+                $line = @(Get-Content -LiteralPath $keyPath |
+                    Where-Object { $_ -match '^\s*TS_AUTHKEY\s*=' }) | Select-Object -First 1
+                if ([string]::IsNullOrWhiteSpace($line)) {
+                    throw "No TS_AUTHKEY entry found in $keyPath."
+                }
+                $secret = ($line -replace '^\s*TS_AUTHKEY\s*=', '').Trim().Trim('"').Trim("'")
+                if ([string]::IsNullOrWhiteSpace($secret)) { throw "TS_AUTHKEY in $keyPath is empty." }
+                Write-Host "Using the TS_AUTHKEY found in $keyPath (value not displayed)."
+            } else {
+                $secure = Read-Host "Paste the short-lived Tailscale auth key (input is not logged)" -AsSecureString
+                $secret = ConvertTo-VibeboxPlainText -SecureString $secure
+            }
+            # Build the guest command as its own variable. Concatenating inside
+            # an array literal makes PowerShell emit a stray extra element.
+            $tagArgument = if ([string]::IsNullOrWhiteSpace($Tag)) { "" } else { " --advertise-tags=$Tag" }
+            $guestCommand = 'read -r key; key=$(printf %s "$key" | tr -d "\r"); tailscale up --auth-key="$key" --hostname="' + $Name + '"' + $tagArgument
             try {
-                Invoke-VibeboxSecretInput -Name "tailscale" -Arguments @(
-                    "exec", $Name, "--", "sudo", "bash", "-lc",
-                    'read -r key; tailscale up --auth-key="$key" --hostname="' + $Name + '" --advertise-tags=tag:vibebox'
-                ) -Secret $secret
+                Invoke-VibeboxSecretInput -Name "tailscale" -GuestCommand $guestCommand `
+                    -Secret $secret -Instance $Name -User $User
             } finally {
                 $secret = $null
             }

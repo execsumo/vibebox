@@ -1,7 +1,11 @@
 [CmdletBinding()]
 param(
     [string]$Name,
-    [switch]$Json
+    [switch]$Json,
+    # The 20-vps group proves unmodified upstream installs work (PostgreSQL,
+    # nginx, timers, sysctl). It is slow and it mutates the guest, so it is
+    # opt-in: run it for Gate A evidence, not on every loop.
+    [switch]$Full
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,13 +37,19 @@ function Add-CheckOutput {
 $guestRoot = Join-Path $root "vm\conformance"
 Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "rm", "-rf", "/tmp/guest", "/tmp/vibebox-conformance") | Out-Null
 Invoke-VibeboxMultipass -Arguments @("transfer", "--recursive", (Join-Path $guestRoot "guest"), "${Name}:/tmp") | Out-Null
-Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "mv", "/tmp/guest", "/tmp/vibebox-conformance") | Out-Null
-Invoke-VibeboxMultipass -Arguments @("transfer", (Join-Path $guestRoot "lib.sh"), "${Name}:/tmp/vibebox-conformance/lib.sh") | Out-Null
+Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "mkdir", "-p", "/tmp/vibebox-conformance") | Out-Null
+Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "mv", "/tmp/guest", "/tmp/vibebox-conformance/guest") | Out-Null
+Invoke-VibeboxMultipass -Arguments @("transfer", (Join-Path $guestRoot "lib.sh"), "${Name}:/tmp/vibebox-lib.sh") | Out-Null
+Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "mv", "/tmp/vibebox-lib.sh", "/tmp/vibebox-conformance/lib.sh") | Out-Null
 
 $guestFiles = @(Get-ChildItem -LiteralPath (Join-Path $guestRoot "guest") -Filter "*.sh" -Recurse -File | Sort-Object FullName)
+if (-not $Full) {
+    $guestFiles = @($guestFiles | Where-Object { $_.Directory.Name -ne '20-vps' })
+    Write-Verbose "Skipping the 20-vps group; re-run with -Full for upstream-install evidence."
+}
 foreach ($file in $guestFiles) {
     $relative = $file.FullName.Substring((Join-Path $guestRoot "guest").Length).TrimStart("\").Replace("\", "/")
-    $remote = "/tmp/vibebox-conformance/$relative"
+    $remote = "/tmp/vibebox-conformance/guest/$relative"
     $result = Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", $remote) -AllowFailure
     $output = ($result.Output -join "`n")
     $before = $results.Count

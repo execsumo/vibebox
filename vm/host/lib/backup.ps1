@@ -25,8 +25,8 @@ function Get-VibeboxBackupKey {
         & ssh-keygen -t ed25519 -N "" -C "vibebox-backup-$Name" -f $private | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "Could not generate the restricted backup key." }
     }
-    & icacls.exe $private /inheritance:r /grant:r "$env:USERNAME:(R)" "SYSTEM:(F)" "Administrators:(F)" | Out-Null
-    & icacls.exe $public /inheritance:r /grant:r "$env:USERNAME:(R)" "SYSTEM:(F)" "Administrators:(F)" | Out-Null
+    & icacls.exe $private /inheritance:r /grant:r "${env:USERNAME}:(R)" "SYSTEM:(F)" "Administrators:(F)" | Out-Null
+    & icacls.exe $public /inheritance:r /grant:r "${env:USERNAME}:(R)" "SYSTEM:(F)" "Administrators:(F)" | Out-Null
     return [pscustomobject]@{ PrivateKey = $private; PublicKey = (Get-Content -LiteralPath $public -Raw).Trim() }
 }
 
@@ -78,10 +78,21 @@ function Invoke-VibeboxBackup {
     if ([string]::IsNullOrWhiteSpace($safeLabel)) { throw "Backup label must contain a letter, number, underscore, or dash." }
     $archive = Join-Path $directory "$Name-backup-$safeLabel.tar.gz"
     $hooksRan = $false
+    $startedForBackup = $false
     try {
         $preResult = Invoke-VibeboxHooks -Name $Name -Phase pre
         $hooksRan = @($preResult.Output | Where-Object { [string]$_ -eq "vibebox-hook-ran" }).Count -gt 0
-        $sshHost = (Get-VibeboxInstanceInfo -Name $Name).IPv4
+        # A scheduled backup fires on a clock, not on the VM's state. Start a
+        # stopped instance rather than failing the night's backup, and put it
+        # back afterwards so the schedule does not silently leave it running.
+        $info = Get-VibeboxInstanceInfo -Name $Name
+        if ($null -eq $info) { throw "Managed instance '$Name' was not found." }
+        if ($info.State -ne "RUNNING") {
+            Write-Host "Starting '$Name' for the backup; it will be stopped again afterwards."
+            $info = Start-VibeboxInstance -Name $Name -Config $Config
+            $startedForBackup = $true
+        }
+        $sshHost = $info.IPv4
         if ([string]::IsNullOrWhiteSpace($sshHost)) { throw "The VM has no reachable local IP." }
         $sshArgs = @(
             "-i", $key.PrivateKey,
@@ -120,6 +131,10 @@ function Invoke-VibeboxBackup {
         $metadata | ConvertTo-Json | Set-Content -LiteralPath "$archive.json" -Encoding utf8
     } finally {
         Invoke-VibeboxHooks -Name $Name -Phase post
+        if ($startedForBackup) {
+            Write-Host "Stopping '$Name' again; it was not running before the backup."
+            Stop-VibeboxInstance -Name $Name -Config $Config | Out-Null
+        }
     }
 
     Get-ChildItem -LiteralPath $directory -Filter "$Name-backup-*.tar.gz" -File |
@@ -133,8 +148,11 @@ function Test-VibeboxArchive {
     param(
         [Parameter(Mandatory)][string]$Archive,
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$User
+        [Parameter(Mandatory)][string]$User,
+        [string]$SourceUser
     )
+    if ([string]::IsNullOrWhiteSpace($SourceUser)) { $SourceUser = $User }
+    if ($SourceUser -notmatch '^[a-z_][a-z0-9_-]{0,31}$') { throw "Source user is not a valid Linux login name." }
     if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) { throw "Archive not found: $Archive" }
     if ($User -notmatch '^[a-z_][a-z0-9_-]{0,31}$') { throw "Guest user is not a valid Linux login name." }
     if ((Split-Path -Leaf $Archive) -notmatch "^$([regex]::Escape($Name))-backup-[A-Za-z0-9_-]+\.tar\.gz$") {
@@ -144,7 +162,7 @@ function Test-VibeboxArchive {
     if ($LASTEXITCODE -ne 0) { throw "Archive could not be read." }
     foreach ($entry in $list) {
         $path = [string]$entry
-        if ($path.StartsWith("/") -or $path -match "(^|/)\.\.(?:/|$)" -or $path -notmatch "^home/$([regex]::Escape($User))(?:/|$)") {
+        if ($path.StartsWith("/") -or $path -match "(^|/)\.\.(?:/|$)" -or $path -notmatch "^home/$([regex]::Escape($SourceUser))(?:/|$)") {
             throw "Archive contains an unsafe or differently-named path: $path"
         }
     }
@@ -156,11 +174,17 @@ function Invoke-VibeboxRestore {
         [Parameter(Mandatory)]$Config,
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Archive,
+        [string]$SourceUser,
         [switch]$DryRun
     )
 
     $resolved = (Resolve-Path -LiteralPath $Archive -ErrorAction Stop).Path
-    $entries = Test-VibeboxArchive -Archive $resolved -Name $Name -User $Config.Values.GUEST_USER
+    $targetUser = $Config.Values.GUEST_USER
+    if ([string]::IsNullOrWhiteSpace($SourceUser)) { $SourceUser = $targetUser }
+    $entries = Test-VibeboxArchive -Archive $resolved -Name $Name -User $targetUser -SourceUser $SourceUser
+    if ($SourceUser -ne $targetUser) {
+        Write-Host "Restoring archive owned by '$SourceUser' into account '$targetUser'; home paths are rewritten."
+    }
     if ($DryRun) {
         $entries | ForEach-Object { Write-Host $_ }
         Write-Host "Dry run: no VM files changed."
@@ -182,14 +206,32 @@ set -Eeuo pipefail
 units=(docker.service vibebox-tailnet.service vibebox-hermes-gateway@__VIBEBOX_USER__.service vibebox-droid-daemon@__VIBEBOX_USER__.service vibebox-hermes-webui@__VIBEBOX_USER__.service)
 for unit in "${units[@]}"; do systemctl stop "$unit" || true; done
 trap 'for unit in "${units[@]}"; do systemctl start "$unit" || true; done' EXIT
-tar --extract --gzip --file '__VIBEBOX_ARCHIVE__' --directory / --no-same-owner
+tar --extract --gzip --file '__VIBEBOX_ARCHIVE__' --directory / --no-same-owner   --transform 's|^home/__VIBEBOX_SOURCE_USER__$|home/__VIBEBOX_USER__|'   --transform 's|^home/__VIBEBOX_SOURCE_USER__/|home/__VIBEBOX_USER__/|'
 chown -R '__VIBEBOX_USER__:__VIBEBOX_USER__' /home/__VIBEBOX_USER__
+# A cross-account restore leaves absolute symlinks pointing at the old home.
+# Retarget them, or every dotfile link silently dangles.
+if [ '__VIBEBOX_SOURCE_USER__' != '__VIBEBOX_USER__' ]; then
+  retargeted=0
+  while IFS= read -r link; do
+    target=$(readlink "$link")
+    case "$target" in
+      /home/__VIBEBOX_SOURCE_USER__/*)
+        newtarget="/home/__VIBEBOX_USER__/${target#/home/__VIBEBOX_SOURCE_USER__/}"
+        ln -sfn "$newtarget" "$link"
+        chown -h '__VIBEBOX_USER__:__VIBEBOX_USER__' "$link"
+        retargeted=$((retargeted + 1))
+        ;;
+    esac
+  done < <(find /home/__VIBEBOX_USER__ -type l)
+  echo "retargeted $retargeted absolute symlink(s) to /home/__VIBEBOX_USER__" 
+fi
 rm -f '__VIBEBOX_ARCHIVE__'
 '@
-        $extract = $extract.Replace("__VIBEBOX_USER__", $Config.Values.GUEST_USER).
+        $extract = $extract.Replace("__VIBEBOX_SOURCE_USER__", $SourceUser).
+            Replace("__VIBEBOX_USER__", $targetUser).
             Replace("__VIBEBOX_ARCHIVE__", $remoteArchive)
         Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $extract) | Out-Null
-        Write-Host "Restored $(($entries | Measure-Object).Count) archive entries into '$Name' as '$($Config.Values.GUEST_USER)'."
+        Write-Host "Restored $(($entries | Measure-Object).Count) archive entries into '$Name' as '$targetUser'."
     } finally {
         if (-not $wasRunning) {
             Invoke-VibeboxMultipass -Arguments @("stop", $Name) | Out-Null

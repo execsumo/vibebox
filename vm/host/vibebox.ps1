@@ -19,6 +19,11 @@ param(
     [switch]$Json,
     [string]$Archive,
     [string]$Label,
+    [string]$SourceUser,
+    [string]$At,
+    [string]$KeyFrom,
+    [string]$Tag,
+    [switch]$IncludeCaches,
     [switch]$DryRun
 )
 
@@ -34,6 +39,8 @@ $lib = Join-Path $PSScriptRoot "lib"
 . (Join-Path $lib "status.ps1")
 . (Join-Path $lib "secrets.ps1")
 . (Join-Path $lib "backup.ps1")
+. (Join-Path $lib "migrate.ps1")
+. (Join-Path $lib "schedule.ps1")
 . (Join-Path $lib "tailnet.ps1")
 
 $ExitUsage = 1
@@ -45,7 +52,7 @@ $ExitOperation = $ExitValidation - $ExitUsage
 function Show-VibeboxUsage {
     @"
 vibebox doctor
-vibebox config <show|diff|apply> [-Restart]
+vibebox config show
 vibebox create [-Name] [-Cpus] [-Memory] [-Disk] [-Release]
 vibebox start|stop|restart [-Name]
 vibebox destroy [-Name] -Confirm
@@ -55,9 +62,11 @@ vibebox console [-Name]
 vibebox provision|update [-Name]
 vibebox rebuild [-Name] -Confirm
 vibebox backup [-Name] [-Label <label>]
-vibebox restore [-Name] -Archive <path> [-DryRun]
+vibebox schedule <enable|disable|status> [-At HH:mm]
+vibebox restore [-Name] -Archive <path> [-SourceUser <user>] [-DryRun]
+vibebox migrate [-Name] -Archive <path> -SourceUser <user> [-IncludeCaches] [-DryRun]
 vibebox conformance [-Name] [-Json]
-vibebox enroll <tailscale|github|hermes>
+vibebox enroll <tailscale|github|hermes> [-KeyFrom <env-file>] [-Tag <tag:name>]
 vibebox tailnet <list|add|remove|apply>
 "@
 }
@@ -93,61 +102,6 @@ function Assert-VibeboxConfirmation {
     }
 }
 
-function Invoke-VibeboxConfigApply {
-    param([Parameter(Mandatory)]$Config)
-
-    $target = Resolve-VibeboxExistingName -Config $Config
-    Assert-VibeboxManagedTarget -Name $target
-    $info = Get-VibeboxInstanceInfo -Name $target
-    if ($null -eq $info) { throw "Managed instance '$target' was not found." }
-    $marker = Get-VibeboxInstanceMarker -Name $target
-    if ($null -ne $marker) {
-        if ([string]$marker.ubuntuRelease -ne [string]$Config.Values.UBUNTU_RELEASE) {
-            throw "UBUNTU_RELEASE is create-time-only. Use vibebox rebuild to change it."
-        }
-        if ([string]$marker.guestUser -ne [string]$Config.Values.GUEST_USER) {
-            throw "GUEST_USER is create-time-only. Use vibebox rebuild to change it."
-        }
-        if ($marker.name -ne $Config.Values.VM_NAME -and [string]::IsNullOrWhiteSpace($Name)) {
-            throw "VM_NAME is create-time-only. Use vibebox rebuild to rename the instance."
-        }
-    }
-    $running = $info.State -eq "RUNNING"
-    if ($running -and -not $Restart) {
-        throw "Configuration apply requires the VM to be stopped. Stop it first, or use -Restart."
-    }
-    if ($running) {
-        # Reconciliation requires the Hyper-V VM to be Off even when the
-        # configured ordinary stop action is Save.
-        Invoke-VibeboxMultipass -Arguments @("stop", $target) | Out-Null
-        for ($attempt = 0; $attempt -lt 30; $attempt++) {
-            $stopped = Get-VibeboxInstanceInfo -Name $target
-            if ($null -ne $stopped -and $stopped.State -eq "STOPPED") { break }
-            Start-Sleep -Seconds 1
-        }
-        if ($null -eq $stopped -or $stopped.State -ne "STOPPED") {
-            throw "VM '$target' did not reach the stopped state for configuration apply."
-        }
-    }
-
-    $vm = Get-VibeboxHyperVInstance -Name $target
-    if ($null -ne $vm) {
-        if ([int]$vm.ProcessorCount -ne [int]$Config.Values.VM_CPUS) {
-            Set-VMProcessor -VM $vm -Count ([int]$Config.Values.VM_CPUS)
-        }
-    } else {
-        Write-Warning "Hyper-V VM properties are unavailable; CPU and memory cannot be reconciled safely."
-    }
-
-    $desiredDisk = ConvertTo-VibeboxBytes -Value $Config.Values.VM_DISK -Name "VM_DISK"
-    Resize-VibeboxHyperVDisk -Name $target -TargetBytes $desiredDisk | Out-Null
-    Set-VibeboxHyperVPolicy -Name $target -Config $Config | Out-Null
-    if ($running) {
-        Start-VibeboxInstance -Name $target -Config $Config | Out-Null
-    }
-    Write-Host "Host configuration applied to '$target'. Run 'vibebox provision' for guest policy/tool changes."
-}
-
 function ConvertTo-VibeboxBytes {
     param([Parameter(Mandatory)][string]$Value, [Parameter(Mandatory)][string]$Name)
     return ConvertTo-VibeboxSizeBytes -Value $Value -Name $Name
@@ -174,28 +128,11 @@ try {
             exit 0
         }
         "config" {
-            if ([string]::IsNullOrWhiteSpace($Subcommand)) { throw "config requires show, diff, or apply." }
+            if ([string]::IsNullOrWhiteSpace($Subcommand)) { throw "config requires show." }
             $config = Get-VibeboxConfig -CreateIfMissing
             switch ($Subcommand.ToLowerInvariant()) {
                 "show" {
                     Get-VibeboxConfigDisplay -Config $config | Format-Table -AutoSize
-                    exit 0
-                }
-                "diff" {
-                    $target = Resolve-VibeboxExistingName -Config $config
-                    $status = if (Test-VibeboxManagedInstance -Name $target) {
-                        Get-VibeboxStatus -Config $config -Name $target
-                    } else { $null }
-                    if ($null -eq $status) {
-                        Write-Host "No managed VM exists for '$target'. All instance settings are pending create."
-                    } else {
-                        $status.configDrift | ForEach-Object { Write-Host "drift: $_" }
-                        if ($status.configDrift.Count -eq 0) { Write-Host "No configuration drift detected." }
-                    }
-                    exit 0
-                }
-                "apply" {
-                    Invoke-VibeboxConfigApply -Config $config
                     exit 0
                 }
                 default { throw "Unknown config operation '$Subcommand'." }
@@ -211,7 +148,7 @@ try {
             }
             $config = Get-VibeboxConfig -Overrides (Get-VibeboxConfigOverridesFromArguments -Arguments $argumentMap) -CreateIfMissing
             New-VibeboxInstance -Config $config | Out-Null
-            Ensure-VibeboxRescuePassword -Name $config.Values.VM_NAME | Out-Null
+            Ensure-VibeboxRescuePassword -Name $config.Values.VM_NAME -User $config.Values.GUEST_USER | Out-Null
             Write-Host "Vibebox '$($config.Values.VM_NAME)' is ready."
             exit 0
         }
@@ -253,7 +190,7 @@ try {
             } else {
                 $status | Format-List
                 if ($status.configDrift.Count -gt 0) {
-                    [Console]::Error.WriteLine("WARNING: configuration drift detected. Run 'vibebox config apply' (or stop the VM first).")
+                    [Console]::Error.WriteLine("WARNING: create-time configuration drift. Reconcile with 'vibebox rebuild -Confirm', or revert vibebox.env.")
                 }
             }
             if ($status.state -in @("unknown", "stopped")) { exit $ExitMissing }
@@ -295,9 +232,12 @@ try {
             $config = Get-VibeboxConfig -CreateIfMissing
             $target = Resolve-VibeboxExistingName -Config $config
             Assert-VibeboxConfirmation -Action "Rebuild" -Target $target
+            # Validate the create plan before destroying anything. A rebuild
+            # that destroys and then fails to create leaves no VM at all.
+            Assert-VibeboxCreatePlan -Config $config
             Remove-VibeboxInstance -Name $target
             New-VibeboxInstance -Config $config | Out-Null
-            Ensure-VibeboxRescuePassword -Name $config.Values.VM_NAME | Out-Null
+            Ensure-VibeboxRescuePassword -Name $config.Values.VM_NAME -User $config.Values.GUEST_USER | Out-Null
             exit 0
         }
         "backup" {
@@ -306,11 +246,33 @@ try {
             Invoke-VibeboxBackup -Config $config -Name $target -Label $Label | Out-Null
             exit 0
         }
+        "schedule" {
+            $config = Get-VibeboxConfig -CreateIfMissing
+            if ([string]::IsNullOrWhiteSpace($Subcommand)) { $Subcommand = "status" }
+            switch ($Subcommand.ToLowerInvariant()) {
+                "enable" {
+                    if ([string]::IsNullOrWhiteSpace($At)) { $At = "12:30" }
+                    Enable-VibeboxBackupSchedule -Config $config -At $At
+                    exit 0
+                }
+                "disable" { Disable-VibeboxBackupSchedule; exit 0 }
+                "status"  { Show-VibeboxBackupSchedule -Config $config; exit 0 }
+                default { throw "Unknown schedule operation '$Subcommand'. Use enable, disable, or status." }
+            }
+        }
+        "migrate" {
+            $config = Get-VibeboxConfig -CreateIfMissing
+            $target = Resolve-VibeboxExistingName -Config $config
+            if ([string]::IsNullOrWhiteSpace($Archive)) { throw "migrate requires -Archive <path>." }
+            if ([string]::IsNullOrWhiteSpace($SourceUser)) { throw "migrate requires -SourceUser <name> (the account the archive was made under)." }
+            Invoke-VibeboxMigrate -Config $config -Name $target -Archive $Archive -SourceUser $SourceUser -IncludeCaches:$IncludeCaches -DryRun:$DryRun
+            exit 0
+        }
         "restore" {
             $config = Get-VibeboxConfig -CreateIfMissing
             $target = Resolve-VibeboxExistingName -Config $config
             if ([string]::IsNullOrWhiteSpace($Archive)) { throw "restore requires -Archive <path>." }
-            Invoke-VibeboxRestore -Config $config -Name $target -Archive $Archive -DryRun:$DryRun
+            Invoke-VibeboxRestore -Config $config -Name $target -Archive $Archive -SourceUser $SourceUser -DryRun:$DryRun
             exit 0
         }
         "enroll" {
@@ -318,7 +280,8 @@ try {
             $target = Resolve-VibeboxExistingName -Config $config
             Assert-VibeboxManagedTarget -Name $target
             if ([string]::IsNullOrWhiteSpace($Subcommand)) { throw "enroll requires tailscale, github, or hermes." }
-            Invoke-VibeboxEnroll -Name $target -User $config.Values.GUEST_USER -Provider $Subcommand
+            $enrollTag = if (-not [string]::IsNullOrWhiteSpace($Tag)) { $Tag } else { [string]$config.Values["TAILSCALE_TAG"] }
+            Invoke-VibeboxEnroll -Name $target -User $config.Values.GUEST_USER -Provider $Subcommand -KeyFrom $KeyFrom -Tag $enrollTag
             exit 0
         }
         "tailnet" {

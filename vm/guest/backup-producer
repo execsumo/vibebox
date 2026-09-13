@@ -9,11 +9,34 @@ home="/home/$user"
     exit 1
 }
 
+# Exclusions come from the shared list so backup and migrate cannot disagree
+# about what counts as regenerable. If the list is missing, fall back to the
+# caches that must never be archived rather than silently backing up
+# everything.
+excludes=()
+list=/opt/vibebox/regenerable.conf
+if [[ -r "$list" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        if [[ "$line" == \*/* ]]; then
+            # Match at any depth, e.g. */node_modules
+            excludes+=( "--exclude=${line#\*/}" )
+        else
+            excludes+=( "--exclude=$home/$line" )
+        fi
+    done < "$list"
+else
+    printf 'regenerable.conf not found; using minimal exclusions\n' >&2
+    excludes=( "--exclude=$home/.cache" "--exclude=$home/.npm" \
+               "--exclude=$home/.vibebox" "--exclude=$home/.local/share/Trash" )
+fi
+
 # This is the only command reachable through the restricted backup key. Tar
 # records owner/group names by default; restore maps those names explicitly.
 exec tar --create --gzip --file=- \
-    --exclude="$home/.cache" \
-    --exclude="$home/.npm" \
-    --exclude="$home/.local/share/Trash" \
-    --exclude="$home/.vibebox" \
+    "${excludes[@]}" \
+    --warning=no-file-changed --warning=no-file-removed \
     --directory=/ "$home"

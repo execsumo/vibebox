@@ -196,6 +196,15 @@ function Get-VibeboxJsonProperty {
     return $property.Value
 }
 
+function Get-VibeboxMarkerHyperVId {
+    param($Marker)
+    # Markers written by an unelevated shell have no hyperVId property at all,
+    # and StrictMode throws rather than returning null for an absent property.
+    if ($null -eq $Marker) { return "" }
+    if ($Marker.PSObject.Properties.Name -notcontains "hyperVId") { return "" }
+    return [string]$Marker.hyperVId
+}
+
 function Assert-VibeboxManagedTarget {
     param([Parameter(Mandatory)][string]$Name)
 
@@ -218,14 +227,15 @@ function Assert-VibeboxManagedTarget {
             throw "Instance '$Name' does not match the image identity recorded by Vibebox. Refusing a destructive operation."
         }
     }
+    # Hyper-V corroboration when the shell can see it. Get-VM needs elevation,
+    # so its absence is not evidence of anything and must not block the
+    # operation -- the marker and image hash above are the actual proof of
+    # ownership. A positive mismatch, however, is disqualifying.
+    $markerHyperVId = Get-VibeboxMarkerHyperVId -Marker $marker
     $hyperv = Get-VibeboxHyperVInstance -Name $Name
-    if ($marker.hyperVId) {
-        if ($null -eq $hyperv) {
-            throw "Could not verify the Hyper-V identity for managed instance '$Name'. Refusing the operation."
-        }
-        if ([string]$marker.hyperVId -ne [string]$hyperv.Id) {
-            throw "Instance '$Name' does not match the Hyper-V identity recorded by Vibebox. Refusing a destructive operation."
-        }
+    if ($markerHyperVId -and $null -ne $hyperv -and
+        $markerHyperVId -ne [string]$hyperv.Id) {
+        throw "Instance '$Name' does not match the Hyper-V identity recorded by Vibebox. Refusing a destructive operation."
     }
 }
 
@@ -242,65 +252,6 @@ function Get-VibeboxHyperVInstance {
     } catch {
         return $null
     }
-}
-
-function Set-VibeboxHyperVPolicy {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)]$Config
-    )
-
-    $vm = Get-VibeboxHyperVInstance -Name $Name
-    if ($null -eq $vm) {
-        Write-Warning "Hyper-V did not expose an exact VM named '$Name'; autostart/stop/nested policy could not be applied."
-        return $false
-    }
-    if ($vm.State -ne "Off") {
-        throw "Hyper-V policy changes require VM '$Name' to be stopped."
-    }
-
-    $memory = Get-VibeboxMemoryBounds -Config $Config
-    Set-VMMemory -VM $vm `
-        -DynamicMemoryEnabled $true `
-        -MinimumBytes $memory.MinimumBytes `
-        -StartupBytes $memory.StartupBytes `
-        -MaximumBytes $memory.MaximumBytes
-
-    $autoStart = ConvertTo-VibeboxBoolean -Value $Config.Values.VM_AUTOSTART -Name "VM_AUTOSTART"
-    $startAction = if ($autoStart) { "Start" } else { "Nothing" }
-    $stopAction = if ($Config.Values.VM_STOP_ACTION -eq "shutdown") { "ShutDown" } else { "Save" }
-    Set-VM -VM $vm -AutomaticStartAction $startAction -AutomaticStopAction $stopAction -AutomaticStartDelay 30
-    $nested = ConvertTo-VibeboxBoolean -Value $Config.Values.VM_NESTED_VIRT -Name "VM_NESTED_VIRT"
-    Set-VMProcessor -VM $vm -ExposeVirtualizationExtensions:$nested
-    return $true
-}
-
-function Resize-VibeboxHyperVDisk {
-    param(
-        [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][uint64]$TargetBytes
-    )
-
-    $vm = Get-VibeboxHyperVInstance -Name $Name
-    if ($null -eq $vm) {
-        throw "Hyper-V did not expose an exact VM named '$Name'; cannot safely resize its disk."
-    }
-    if ($vm.State -ne "Off") {
-        throw "Disk changes require VM '$Name' to be stopped."
-    }
-    $drive = @(Get-VMHardDiskDrive -VM $vm | Select-Object -First 1)
-    if ($drive.Count -eq 0 -or [string]::IsNullOrWhiteSpace($drive[0].Path)) {
-        throw "Could not resolve the exact VHDX for VM '$Name'."
-    }
-    $vhd = Get-VHD -Path $drive[0].Path -ErrorAction Stop
-    if ([uint64]$vhd.Size -gt $TargetBytes) {
-        throw "Configured VM_DISK is smaller than the current VHDX. Shrinking a VM disk is refused."
-    }
-    if ([uint64]$vhd.Size -lt $TargetBytes) {
-        Resize-VHD -Path $drive[0].Path -SizeBytes $TargetBytes
-        return $true
-    }
-    return $false
 }
 
 function Get-VibeboxImageHash {
@@ -328,7 +279,10 @@ function New-VibeboxGuestPayload {
     $effectiveEnv = foreach ($key in $script:VibeboxConfigKeys) {
         "$key=$($Config.Values[$key])"
     }
-    Set-Content -LiteralPath $envPath -Value $effectiveEnv -Encoding ascii
+    # These files are consumed by Linux. Set-Content would write CRLF on
+    # Windows, and a trailing carriage return silently becomes part of every
+    # value -- GUEST_USER=herwin+CR no longer names a real account.
+    [System.IO.File]::WriteAllText($envPath, (($effectiveEnv -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
     try {
         # Transfer the contents, not the host directory itself. This keeps the
         # clean guest contract at /opt/vibebox/{provision,units,...}.
@@ -373,6 +327,26 @@ function Wait-VibeboxInstance {
     throw "VM '$Name' did not become running with an address within $TimeoutSeconds seconds."
 }
 
+function Assert-VibeboxCreatePlan {
+    param([Parameter(Mandatory)]$Config)
+
+    # Touch every configuration value the create path dereferences, so a stale
+    # or missing key fails here rather than after a destroy has already run.
+    $required = @("UBUNTU_RELEASE", "VM_NAME", "VM_CPUS", "VM_MEMORY", "VM_DISK",
+                  "GUEST_USER", "GUEST_SHELL", "READINESS_TIMEOUT_SEC")
+    # $Config.Values is a hashtable; index it rather than walking PSObject
+    # properties, which do not enumerate hashtable keys.
+    $missing = @()
+    foreach ($key in $required) {
+        if ([string]::IsNullOrWhiteSpace([string]$Config.Values[$key])) {
+            $missing += $key
+        }
+    }
+    if ($missing.Count -gt 0) {
+        throw "Configuration is missing values required to create an instance: $($missing -join ', '). Nothing was changed."
+    }
+}
+
 function New-VibeboxInstance {
     param(
         [Parameter(Mandatory)]$Config,
@@ -408,11 +382,10 @@ function New-VibeboxInstance {
             if ([string]$marker.guestUser -ne [string]$Config.Values.GUEST_USER) {
                 throw "Interrupted creation of '$name' used guest user $($marker.guestUser), but configuration requests $($Config.Values.GUEST_USER). Remove the incomplete VM and marker before retrying."
             }
-            if ([string]::IsNullOrWhiteSpace([string]$marker.hyperVId)) {
-                throw "Interrupted creation of '$name' has no recorded Hyper-V identity. Refusing to adopt an unverified VM; remove the incomplete VM and marker before retrying."
-            }
+            $markerHyperVId = Get-VibeboxMarkerHyperVId -Marker $marker
             $hyperv = Get-VibeboxHyperVInstance -Name $name
-            if ($null -eq $hyperv -or [string]$marker.hyperVId -ne [string]$hyperv.Id) {
+            if ($markerHyperVId -and $null -ne $hyperv -and
+                $markerHyperVId -ne [string]$hyperv.Id) {
                 throw "Interrupted creation of '$name' does not match its recorded Hyper-V identity. Remove the incomplete VM and marker before retrying."
             }
             Write-Host "Resuming interrupted creation of '$name'."
@@ -424,11 +397,14 @@ function New-VibeboxInstance {
             Invoke-VibeboxGuestProvision -Name $name
             Invoke-VibeboxMultipass -Arguments @("stop", $name) | Out-Null
             Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash $existing.ImageHash
-            Set-VibeboxHyperVPolicy -Name $name -Config $Config | Out-Null
             return Start-VibeboxInstance -Name $name -Config $Config
         }
-        Write-Host "Instance '$name' already exists; create is a clean no-op."
-        return $existing
+        # Only a real instance is a no-op. When a stale "creating" marker was
+        # cleared above, $existing is null and we must fall through and create.
+        if ($null -ne $existing) {
+            Write-Host "Instance '$name' already exists; create is a clean no-op."
+            return $existing
+        }
     }
     if ($null -ne (Get-VibeboxInstanceInfo -Name $name)) {
         throw "An unrelated Multipass instance already uses '$name'. Choose another VM_NAME."
@@ -446,7 +422,7 @@ function New-VibeboxInstance {
         Replace("__VIBEBOX_SSH_PUBLIC_KEY__", $key.PublicKey)
     $state = Get-VibeboxStateDirectory
     $userDataPath = Join-Path $state "$name-user-data.yaml"
-    Set-Content -LiteralPath $userDataPath -Value $userData -Encoding utf8
+    [System.IO.File]::WriteAllText($userDataPath, ($userData -replace "`r`n", "`n"), [System.Text.UTF8Encoding]::new($false))
 
     # Write an intent before launch so Ctrl-C at any point leaves a resumable
     # marker rather than an ambiguous instance.
@@ -456,7 +432,7 @@ function New-VibeboxInstance {
         "launch", "release:$($Config.Values.UBUNTU_RELEASE)",
         "--name", $name,
         "--cpus", $Config.Values.VM_CPUS,
-        "--memory", $Config.Values.VM_MEMORY_STARTUP,
+        "--memory", $Config.Values.VM_MEMORY,
         "--disk", $Config.Values.VM_DISK,
         "--cloud-init", $userDataPath
     )
@@ -469,7 +445,6 @@ function New-VibeboxInstance {
     Invoke-VibeboxGuestProvision -Name $name
     Invoke-VibeboxMultipass -Arguments @("stop", $name) | Out-Null
     Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash $info.ImageHash
-    Set-VibeboxHyperVPolicy -Name $name -Config $Config | Out-Null
     $info = Start-VibeboxInstance -Name $name -Config $Config
     return $info
 }
@@ -498,7 +473,8 @@ function Stop-VibeboxInstance {
         Write-Host "Instance '$Name' is already stopped."
         return $info
     }
-    $stopCommand = if ($Config.Values.VM_STOP_ACTION -eq "save") { "suspend" } else { "stop" }
+    # ACPI shutdown, not suspend: a saved VM resumes with a stale clock.
+    $stopCommand = "stop"
     Invoke-VibeboxMultipass -Arguments @($stopCommand, $Name) | Out-Null
     return (Get-VibeboxInstanceInfo -Name $Name)
 }

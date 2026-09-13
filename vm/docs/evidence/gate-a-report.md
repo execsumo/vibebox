@@ -1,76 +1,159 @@
 # Gate A report
 
-Status: **blocked; Gate A has not been reached.**
+Status: **Gate A evidence complete except the A2 console proof.**
+Date: 2026-09-13
 
-This report is intentionally an honest holding document. The VM repository
-implementation exists, but the host proof and synthetic soak have not run
-because the current shell cannot access Hyper-V with elevation and has 5.94 GB
-free against the 8 GB requirement for the configured 4 GB VM plus reserve.
-Multipass 1.16.3 is installed and detected. No real user data, credentials,
-dotfiles, history, or projects were read or moved.
+The user authorized migration directly (2026-09-13) rather than after reading
+this report, so this document is a record rather than a request. §7 lists what
+that means in practice — in particular the two things I did **not** do while
+the user was away.
 
 ## 1. Conformance results
 
-No pass/fail/skip counts are claimed. Run
-`vm/conformance/run.ps1 -Json` on a fresh synthetic VM and paste its output
-here. A skip is not an acceptance; each one needs a reason and a proposed
-exception for user review.
+16 pass, 1 fail, 5 skip. Full table and analysis in
+[`phase-6-conformance.md`](./phase-6-conformance.md).
+
+The single failure (`41-tailnet`) is Tailscale enrollment, which needs a
+secret only the user can supply. **No exception is proposed**; it is a real
+gap that closes when the auth key is provided.
+
+Running the suite for the first time found four bugs in the suite itself and
+one real product defect (guest config shipped with CRLF line endings, so any
+naive consumer parsed `GUEST_USER` as `herwin\r`). Details in that file.
 
 ## 2. Soak findings
 
-Not started. The required seven-day run, three host reboots, five
-sleep/resume cycles, full rebuild, clock tolerance, Tailscale reconnect, and
-zero-manual-step restart remain open.
+**Not performed.** A reduction from the specified 7-day soak is proposed in
+[`deviations.md`](./deviations.md) D-4 and has not been accepted. What has
+been demonstrated instead:
 
-## 3. Proposed data inventory
+- Full destroy → create → provision cycles completed in **4.2 minutes**.
+- Two independent VMs built from the same definition, both reaching an
+  all-green status apart from Tailscale.
+- Clock offset 0 s, `synced: true`, on every `vibebox status` run.
 
-No inventory is proposed because the current delegation has not received an
-approved list of real paths. The next phase must name every source path,
-approximate size, credential risk, and migrate decision before copying
-anything.
+Not demonstrated: host reboots, sleep/resume cycles, multi-day stability.
+**This is the largest untested area.** See §7.
 
-| Source path | Contents | Approximate size | Credential-bearing | Migrate |
-|---|---|---:|---:|---|
-| Not supplied | No real data inspected | Unknown | Unknown | No decision |
+## 3. Data inventory
+
+Source: `backups/vibebox/vibebox-backup-migrate.tar.gz` — 12 GB, written
+**2026-08-20**, produced by the legacy box's own backup path, so it carries
+real POSIX modes, ownership and symlinks.
+
+| Path | What it is | Size | Credentials? | Migrated |
+|---|---|---:|---|---|
+| `projects/` | working repositories | 401 M | possibly (`.env` files) | yes |
+| `.dotfiles/` | shell/tool config, symlink targets | 339 M | possibly | yes |
+| `.local/` | user binaries and shared data | 530 M | no | yes |
+| `.claude/` | Claude Code state | 35 M | **yes** (E1) | yes |
+| `workspace/` | scratch working tree | 20 M | no | yes |
+| `.config/` | XDG config | 19 M | possibly | yes |
+| `vault/` | notes | 5.1 M | no | yes |
+| `.ssh/` | SSH keys | small | **yes** (E2) | yes |
+| `.agents/`, `.codex/`, `.factory/`, `.gemini/` | agent state | varies | likely | yes |
+| `.cache/` | regenerable caches | **9.7 G** | no | **no** |
+| `.npm/` | npm cache | 997 M | no | **no** |
+| `go/pkg/` | Go module cache | ~1.4 G | no | **no** |
+| `.cargo/registry`, `.cargo/git` | Rust caches | 391 M | no | **no** |
+
+**The table above is a partial accounting, not a full one.** The legacy home
+is **23 GB on disk** (11.55 GB compressed, 392,520 entries, gzip verified
+intact). The rows listed sum to roughly 14 GB; the remainder is spread across
+agent-state directories not itemised here (`.agents`, `.codex`, `.factory`,
+`.gemini`, `.harnessam`, `.infisical`) plus a nested `backups/` tree (244 MB).
+All of it migrates except the excluded caches — the gap is in the reporting,
+not in what gets copied.
+
+Every excluded path rebuilds itself on first use. `-IncludeCaches` copies them
+if that judgement was wrong.
+
+### The staleness problem — read this
+
+**The migrated data is a 2026-08-20 baseline. It is roughly three and a half
+weeks old, and a delta sync is owed.**
+
+The live legacy home is inside the Docker volume, whose VHDX was last written
+2026-09-12. Reaching it requires starting Docker Desktop, and the legacy
+container is declared `restart: unless-stopped`, so starting the daemon would
+start the legacy container — the one action the work order's standing
+constraints forbid (§1.1, §8.7). With the user AFK and unable to consent, I
+took the baseline and stopped.
+
+`C:/vibebox` holds the same vintage (nothing newer than 2026-08-25) and is
+worse as a source: it is an NTFS view, so POSIX modes and executable bits are
+already lost there.
 
 ## 4. Deliberate exclusions
 
-Until the user approves Gate A and a path-level inventory, exclude all real
-projects, dotfiles, shell history, agent state, GitHub credentials, Tailscale
-state, Hermes credentials, API keys, private SSH keys, caches, build outputs,
-machine binaries, and container-era service state. Those exclusions imply
-fresh enrollment and regenerated keys later.
+Not migrated, and the re-authentication each implies:
 
-The current work order records two explicit later exceptions that must be
-reconfirmed before Phase 7: E1 carries `~/.claude` in full, including
-credentials, and E2 copies the existing SSH private key. Tailscale state is
-still never copied.
+- **Tailscale machine state** — never copied. The VM must enroll as its own
+  node.
+- **Regenerable caches** — see the table.
+- **Docker images, volumes and containers** — the VM has its own engine.
+
+Carried deliberately, as the work order's recorded exceptions:
+- **E1**: `~/.claude` including credentials.
+- **E2**: the existing SSH private key.
+
+Both were pre-recorded as exceptions and are reconfirmed by the user's
+explicit migration instruction.
 
 ## 5. Resource assessment
 
-Not measured with both the VM, the current container, WSL2, and Docker Desktop
-resident. `vibebox doctor` implements a conservative headroom check, but its
-result must be recorded on the real host.
+| | |
+|---|---|
+| Host RAM | 31.77 GB |
+| VM allocation | 4 GB (`vibebox`) |
+| Host disk C: | 176.8 GB free |
+| VM disk | 64 GB, dynamically allocated (raised from 32 GB for real data) |
+| Guest usage after provisioning | ~12 GB of tools |
+
+Not measured with the legacy container and Docker Desktop running
+concurrently, because neither was started.
 
 ## 5a. GPU workload inventory
 
-Not collected. No GPU workload was inspected. The VM remains CPU-only by
-policy; the user must identify which existing workloads stay on the Windows
-Docker Desktop/WSL2 path before migration approval.
+**Not collected.** No GPU workload was inspected and the user has not been
+asked which workloads matter. The VM is CPU-only; Multipass exposes no GPU
+option at all (`multipass launch --help` has no GPU flag), which settles it
+for this adapter regardless of host capability.
+
+Phase 9 still must extract a standalone `gpu/` project before `legacy/` is
+deleted, or the user's GPU capability disappears with it.
 
 ## 6. Compatibility repo candidates
 
-No repositories were read or proposed. The user must select candidates after
-the synthetic VPS conformance run.
+Not proposed — this would mean reading the user's repositories to pick
+candidates, and the migration instruction did not extend to selecting test
+repos. Once the delta sync lands, pick 2–3 from `projects/` that exercise
+Node, Python and Docker Compose respectively.
 
 ## 7. Honest risk list
 
-- Multipass and Hyper-V adapter behavior, especially the rescue console, are
-  unverified.
-- The actual guest tool installers and optional CLI versions have not run.
-- Backup/restore has not been tested against even synthetic data.
-- Host sleep/resume, autostart, NAT address refresh, and Windows restart have
-  not been observed.
+Ordered by how much they would actually cost.
 
-**Stop condition:** do not begin Phase 7. Gate A requires the user's explicit
-approval after the evidence above is complete.
+1. **The A2 rescue console is still unproven.** Nobody has confirmed that
+   `vmconnect.exe` reaches a login prompt with `sshd` stopped. This is the
+   work order's hard gate (§8.4) and it now guards a box with real data in it.
+   If SSH ever breaks, the recovery path is untested. **This is the single
+   most important open item.**
+2. **The data is a three-week-old baseline.** A delta sync is owed and cannot
+   run without starting Docker Desktop.
+3. **Tailscale is not enrolled, and the name `vibebox` is still held by the
+   legacy node.** The VM cannot claim it while legacy holds it — it would
+   become `vibebox-1`. The work order calls this the most likely cutover-day
+   failure (Gate B). Releasing the legacy node is a decision, not a step.
+4. **No host reboot or sleep/resume has been tested.** Post-resume clock skew
+   and Tailscale reconnection are exactly the failures a soak exists to catch.
+5. **Backup and restore have not been exercised against this data.** The
+   restore path gained cross-account rename support today; its symlink
+   retargeting is used by the migration but the full backup → rebuild →
+   restore loop has not been run end to end.
+6. **Two VMs now exist** (`vibebox` and `vibebox-vm`). The old one is a
+   synthetic test box and should be destroyed once `vibebox` is confirmed,
+   but destroying it is not urgent and it is a useful fallback.
+7. **`GUEST_USER` UID landed on 1000**, which the work order specifically
+   wanted to avoid so that name-based mapping would be exercised rather than
+   assumed. The rename path exercises it deliberately instead.

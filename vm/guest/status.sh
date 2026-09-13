@@ -91,8 +91,10 @@ for unit in service_names:
     services.append({"unit": unit, "active": active == "active", "sub": sub or "dead"})
 
 tailscale_self = tailscale.get("Self", {})
+# BackendState is authoritative. A logged-out node still reports a Self
+# object, so presence of Self is not evidence the node is on the tailnet.
 tailscale_info = {
-    "state": "Running" if tailscale_self else "Stopped",
+    "state": tailscale.get("BackendState") or ("Running" if tailscale_self else "Stopped"),
     "name": tailscale_self.get("HostName", ""),
     "ip": (tailscale_self.get("TailscaleIPs") or [""])[0],
 }
