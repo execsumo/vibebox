@@ -58,5 +58,42 @@ function Update-VibeboxSshAlias {
     $filtered.Add("    IdentitiesOnly yes")
     $filtered.Add($end)
     Set-Content -LiteralPath $configPath -Value $filtered -Encoding ascii
+
+    # ssh takes the FIRST value it sees for each keyword, so an earlier
+    # "Host <name>" block silently wins over the one just written. The legacy
+    # container's setup-sandbox alias does exactly this -- it points the same
+    # name at 127.0.0.1 -- and the failure reads as "Connection refused"
+    # rather than anything pointing at the real cause.
+    $conflict = Find-VibeboxSshAliasConflict -ConfigPath $configPath -Name $Name
+    if ($null -ne $conflict) {
+        Write-Warning ("~/.ssh/config defines 'Host $Name' at line $($conflict.Line) before the vibebox block, " +
+            "pointing at $($conflict.HostName). ssh uses the first match, so that entry wins and this alias is ignored. Remove it.")
+    }
     return $configPath
+}
+
+function Find-VibeboxSshAliasConflict {
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) { return $null }
+    $lines = @(Get-Content -LiteralPath $ConfigPath)
+    $marker = "# >>> vibebox alias: $Name >>>"
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -eq $marker) { return $null }   # ours comes first; nothing shadows it
+        if ($lines[$i] -match '^\s*Host\s+(.+)$') {
+            $patterns = $Matches[1].Trim() -split '\s+'
+            if ($patterns -contains $Name) {
+                $hostName = "an unspecified address"
+                for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+                    if ($lines[$j] -match '^\s*Host\s+') { break }
+                    if ($lines[$j] -match '^\s*HostName\s+(.+)$') { $hostName = $Matches[1].Trim(); break }
+                }
+                return [pscustomobject]@{ Line = $i + 1; HostName = $hostName }
+            }
+        }
+    }
+    return $null
 }
