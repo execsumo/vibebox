@@ -24,6 +24,8 @@ param(
     [string]$KeyFrom,
     [string]$Tag,
     [switch]$IncludeCaches,
+    [switch]$ToolsOnly,
+    [switch]$OsOnly,
     [switch]$DryRun
 )
 
@@ -59,7 +61,8 @@ vibebox destroy [-Name] -Confirm
 vibebox status [-Name] [-Json]
 vibebox ssh [-Name] [-- <command>]
 vibebox console [-Name]
-vibebox provision|update [-Name]
+vibebox provision [-Name]
+vibebox update [-Name] [-ToolsOnly] [-OsOnly]
 vibebox rebuild [-Name] -Confirm
 vibebox backup [-Name] [-Label <label>]
 vibebox schedule <enable|disable|status> [-At HH:mm]
@@ -225,7 +228,15 @@ try {
             $config = Get-VibeboxConfig -CreateIfMissing
             $target = Resolve-VibeboxExistingName -Config $config
             Assert-VibeboxManagedTarget -Name $target
-            Invoke-VibeboxMultipass -Arguments @("exec", $target, "--", "sudo", "/opt/vibebox/provision/30-tools", "/etc/vibebox/vibebox.env") | Out-Null
+            if ($ToolsOnly -and $OsOnly) { throw "Use either -ToolsOnly or -OsOnly, not both." }
+            $mode = if ($ToolsOnly) { "tools" } elseif ($OsOnly) { "os" } else { "all" }
+            # An OS upgrade is slow and can restart services, so give this the
+            # long allowance rather than the 300s default.
+            $result = Invoke-VibeboxMultipass -Arguments @(
+                "exec", $target, "--", "sudo", "/opt/vibebox/update.sh",
+                "/etc/vibebox/vibebox.env", $mode
+            ) -TimeoutSeconds 3600
+            $result.Output | ForEach-Object { Write-Host $_ }
             exit 0
         }
         "rebuild" {

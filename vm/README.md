@@ -133,6 +133,90 @@ advertise no tag.
 Check with `vibebox status`: it reports the Tailscale backend state verbatim,
 so a logged-out node reads `NeedsLogin` rather than being reported as running.
 
+## Authorizing SSH access
+
+**Nothing to configure for the host.** `vibebox` generates its own key at
+`vm/state/ssh/id_ed25519` (gitignored), cloud-init installs the public half at
+create time, and `vibebox migrate` re-asserts it -- a migrated home carries the
+old box's `authorized_keys`, which would otherwise overwrite it and lock the
+host out of the VM it just populated.
+
+**To authorize another device**, drop its public key in as its own file:
+
+```
+vm/guest/authorized_keys.d/laptop.pub
+vm/guest/authorized_keys.d/phone.pub
+```
+
+then:
+
+```powershell
+.\vm\host\vibebox.ps1 provision
+```
+
+Provisioning writes every `.pub` in that directory into the guest user's
+`~/.ssh/authorized_keys`, inside a marker-delimited block it owns:
+
+```
+# >>> vibebox authorized_keys.d >>>
+...declared keys...
+# <<< vibebox authorized_keys.d <<<
+```
+
+**To revoke a key, delete its `.pub` and re-provision.** The guest tree is
+mirrored from the repository rather than accumulated, so the key is removed
+from `authorized_keys` too.
+
+Anything outside those markers is left alone, so a key you added by hand in the
+guest survives and re-provisioning cannot lock you out of your own box. The
+flip side is that a hand-added key is not revoked by this mechanism -- remove
+it from the guest directly.
+
+### Why keys belong in git
+
+`~/.ssh/authorized_keys` in the guest is real state but it is not reproducible:
+`vibebox rebuild` without a restore starts from a fresh home, and every key
+added by hand is gone with no error to say so. Anything that must survive a
+rebuild has to be declared somewhere reproducible -- the same reason the tailnet
+registry lives in `guest/tailnet.d/`.
+
+Public keys are not secrets. You hand them to every server you connect to, and
+committing them is the point. **Never put a private key there**; nothing under
+`vm/guest/` should ever hold one, and `vibebox doctor` fails on key-shaped
+values in configuration for the same reason.
+
+Password authentication is disabled on the network path (`ssh_pwauth: false`
+plus a hardening drop-in). The console keeps password auth as the rescue path,
+which is what the rescue password in `vm/state/rescue/` is for.
+
+## Updating
+
+```powershell
+.\vm\host\vibebox.ps1 update              # OS packages and toolchain
+.\vm\host\vibebox.ps1 update -ToolsOnly   # toolchain only; fast, mid-session safe
+.\vm\host\vibebox.ps1 update -OsOnly      # apt only
+```
+
+The legacy container had two commands for this: `update` for tools and
+`update-image` for the OS. It skipped APT deliberately, because a system
+upgrade was slow and its results were discarded by the next
+`docker compose down/up`. **A VM persists, so that split buys nothing** and one
+command covers both.
+
+Tool updates run through `guest/provision/30-tools`, the same code path
+`provision` uses, so the two cannot drift about how a tool is installed. With
+`TOOLS_UPDATE_POLICY=locked` the toolchain is pinned to `manifest.lock` and this
+becomes a no-op for tools.
+
+`update` reports what actually changed -- package version deltas and tool
+version deltas -- rather than scrolling raw apt output.
+
+**It never restarts anything.** `needrestart` runs in list-only mode during the
+upgrade, because restarting `dbus` or `sshd` mid-command kills the channel the
+command arrived on: the upgrade succeeds while the caller sees a failure. Any
+service needing a restart, and any pending reboot, is reported for you to action
+with `vibebox restart`.
+
 ## Tailnet URLs
 
 The VM is one Tailscale node. Extra HTTPS names are **Tailscale Services**

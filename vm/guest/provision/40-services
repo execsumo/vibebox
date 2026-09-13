@@ -47,3 +47,40 @@ if [[ -x /opt/hermes-webui/ctl.sh ]]; then
 else
     printf 'optional service skipped: Hermes WebUI is not installed\n' >&2
 fi
+
+# Authorized keys declared in git, so they survive a rebuild. Installed into a
+# marker-delimited block that provisioning owns; anything the user added to the
+# file by hand sits outside the markers and is preserved, so re-provisioning
+# can never lock someone out of their own box.
+keys_dir="$ROOT/authorized_keys.d"
+auth_file="/home/$GUEST_USER/.ssh/authorized_keys"
+begin="# >>> vibebox authorized_keys.d >>>"
+end="# <<< vibebox authorized_keys.d <<<"
+if [[ -d "$keys_dir" ]]; then
+    install -d -m 700 -o "$GUEST_USER" -g "$GUEST_USER" "/home/$GUEST_USER/.ssh"
+    touch "$auth_file"
+    tmp=$(mktemp)
+    awk -v b="$begin" -v e="$end" '
+        $0 == b { skip = 1; next }
+        $0 == e { skip = 0; next }
+        !skip   { print }
+    ' "$auth_file" > "$tmp"
+    declared=0
+    {
+        echo "$begin"
+        for key in "$keys_dir"/*.pub; do
+            [[ -e "$key" ]] || continue
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                line=$(printf %s "$line" | tr -d '\r')
+                [[ -z "${line//[[:space:]]/}" ]] && continue
+                case "$line" in \#*) continue ;; esac
+                echo "$line"
+                declared=$((declared + 1))
+            done < "$key"
+        done
+        echo "$end"
+    } >> "$tmp"
+    install -m 600 -o "$GUEST_USER" -g "$GUEST_USER" "$tmp" "$auth_file"
+    rm -f "$tmp"
+    echo "authorized_keys: $declared declared key(s) installed"
+fi

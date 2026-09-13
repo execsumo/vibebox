@@ -289,7 +289,13 @@ function New-VibeboxGuestPayload {
         Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", "if [[ -f /opt/vibebox/manifest.lock ]]; then cp /opt/vibebox/manifest.lock /tmp/vibebox-manifest.lock; fi; rm -rf /tmp/guest") | Out-Null
         Invoke-VibeboxMultipass -Arguments @("transfer", "--recursive", $guest, "${Name}:/tmp") | Out-Null
         Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "mkdir", "-p", "/opt/vibebox") | Out-Null
-        Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "cp", "-a", "/tmp/guest/.", "/opt/vibebox/") | Out-Null
+        # rsync --delete, not cp -a. cp only adds, so a file deleted from the
+        # repository lingers in the guest forever: a withdrawn tailnet name keeps
+        # being advertised, and -- worse -- a revoked key in authorized_keys.d
+        # stays authorized. The guest tree is a mirror of the repository, not an
+        # accumulation. manifest.lock is generated in-guest and is restored below.
+        Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "rsync", "-a", "--delete",
+            "--exclude", "manifest.lock", "/tmp/guest/", "/opt/vibebox/") | Out-Null
         Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", "if [[ -f /tmp/vibebox-manifest.lock ]]; then cp /tmp/vibebox-manifest.lock /opt/vibebox/manifest.lock; fi; rm -rf /tmp/guest /tmp/vibebox-manifest.lock") | Out-Null
         Invoke-VibeboxMultipass -Arguments @("transfer", $envPath, "${Name}:/tmp/vibebox.env") | Out-Null
         Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "cp", "/tmp/vibebox.env", "/opt/vibebox/vibebox.env") | Out-Null
