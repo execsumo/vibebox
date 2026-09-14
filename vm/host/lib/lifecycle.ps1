@@ -353,6 +353,44 @@ function Assert-VibeboxCreatePlan {
     }
 }
 
+function Set-VibeboxDynamicMemory {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Config,
+        [switch]$Quiet
+    )
+
+    # Hyper-V dynamic memory is the one thing Multipass cannot set for us, so
+    # it is the one thing that needs an elevated shell. Never block create on
+    # it: apply when we can, say so plainly when we cannot.
+    $minBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY_MIN -Name "VM_MEMORY_MIN"
+    $startBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY_STARTUP -Name "VM_MEMORY_STARTUP"
+    $maxBytes = ConvertTo-VibeboxSizeBytes -Value $Config.Values.VM_MEMORY -Name "VM_MEMORY"
+
+    $vm = Get-VibeboxHyperVInstance -Name $Name
+    if ($null -eq $vm) {
+        if (-not $Quiet) {
+            Write-Warning ("Dynamic memory ($($Config.Values.VM_MEMORY_MIN)/$($Config.Values.VM_MEMORY_STARTUP)/$($Config.Values.VM_MEMORY)) was not applied: " +
+                "Hyper-V needs an elevated shell. Run vibebox memory apply to set it.")
+        }
+        return $false
+    }
+    if ([string]$vm.State -ne "Off") {
+        throw "Dynamic memory can only be set while $Name is stopped."
+    }
+    try {
+        Set-VM -Name $Name -DynamicMemory `
+            -MemoryMinimumBytes $minBytes -MemoryStartupBytes $startBytes -MemoryMaximumBytes $maxBytes -ErrorAction Stop
+    } catch {
+        if (-not $Quiet) { Write-Warning "Could not set dynamic memory: $($_.Exception.Message)" }
+        return $false
+    }
+    if (-not $Quiet) {
+        Write-Host "Dynamic memory: min $($Config.Values.VM_MEMORY_MIN), startup $($Config.Values.VM_MEMORY_STARTUP), max $($Config.Values.VM_MEMORY)."
+    }
+    return $true
+}
+
 function New-VibeboxInstance {
     param(
         [Parameter(Mandatory)]$Config,
@@ -403,6 +441,7 @@ function New-VibeboxInstance {
             Invoke-VibeboxGuestProvision -Name $name
             Invoke-VibeboxMultipass -Arguments @("stop", $name) | Out-Null
             Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash $existing.ImageHash
+            $null = Set-VibeboxDynamicMemory -Name $name -Config $Config
             return Start-VibeboxInstance -Name $name -Config $Config
         }
         # Only a real instance is a no-op. When a stale "creating" marker was
@@ -451,6 +490,7 @@ function New-VibeboxInstance {
     Invoke-VibeboxGuestProvision -Name $name
     Invoke-VibeboxMultipass -Arguments @("stop", $name) | Out-Null
     Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash $info.ImageHash
+    $null = Set-VibeboxDynamicMemory -Name $name -Config $Config
     $info = Start-VibeboxInstance -Name $name -Config $Config
     return $info
 }

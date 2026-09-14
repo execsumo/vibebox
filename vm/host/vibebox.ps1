@@ -63,6 +63,7 @@ vibebox ssh [-Name] [-- <command>]
 vibebox console [-Name]
 vibebox provision [-Name]
 vibebox update [-Name] [-ToolsOnly] [-OsOnly]
+vibebox memory <show|apply>
 vibebox rebuild [-Name] -Confirm
 vibebox backup [-Name] [-Label <label>]
 vibebox schedule <enable|disable|status> [-At HH:mm]
@@ -223,6 +224,47 @@ try {
             New-VibeboxGuestPayload -Name $target -Config $config
             Invoke-VibeboxGuestProvision -Name $target
             exit 0
+        }
+        "memory" {
+            $config = Get-VibeboxConfig -CreateIfMissing
+            $target = Resolve-VibeboxExistingName -Config $config
+            Assert-VibeboxManagedTarget -Name $target
+            $bounds = "min $($config.Values.VM_MEMORY_MIN), startup $($config.Values.VM_MEMORY_STARTUP), max $($config.Values.VM_MEMORY)"
+            if ([string]::IsNullOrWhiteSpace($Subcommand)) { $Subcommand = "show" }
+            switch ($Subcommand.ToLowerInvariant()) {
+                "show" {
+                    Write-Host "configured: $bounds"
+                    $vm = Get-VibeboxHyperVInstance -Name $target
+                    if ($null -eq $vm) {
+                        Write-Host "live      : unreadable without an elevated shell"
+                    } else {
+                        Write-Host "live      : dynamic=$($vm.DynamicMemoryEnabled) min=$([math]::Round($vm.MemoryMinimum/1GB,2))G startup=$([math]::Round($vm.MemoryStartup/1GB,2))G max=$([math]::Round($vm.MemoryMaximum/1GB,2))G"
+                    }
+                    exit 0
+                }
+                "apply" {
+                    $info = Get-VibeboxInstanceInfo -Name $target
+                    $wasRunning = ($null -ne $info -and $info.State -eq "RUNNING")
+                    if ($wasRunning) {
+                        Write-Host "Stopping $target; Hyper-V only accepts memory changes while it is off."
+                        Stop-VibeboxInstance -Name $target -Config $config | Out-Null
+                    }
+                    if (Get-VibeboxHyperVInstance -Name $target) {
+                        $null = Set-VibeboxDynamicMemory -Name $target -Config $config
+                    } else {
+                        # Re-run just this step elevated rather than making the
+                        # user open an admin shell and retype it.
+                        Write-Host "Requesting elevation to set dynamic memory ($bounds)..."
+                        $script = "Set-VM -Name $target -DynamicMemory -MemoryMinimumBytes $((ConvertTo-VibeboxSizeBytes -Value $config.Values.VM_MEMORY_MIN -Name VM_MEMORY_MIN)) -MemoryStartupBytes $((ConvertTo-VibeboxSizeBytes -Value $config.Values.VM_MEMORY_STARTUP -Name VM_MEMORY_STARTUP)) -MemoryMaximumBytes $((ConvertTo-VibeboxSizeBytes -Value $config.Values.VM_MEMORY -Name VM_MEMORY))"
+                        $p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList "-NoProfile","-Command",$script
+                        if ($p.ExitCode -ne 0) { throw "Elevated memory change failed with exit code $($p.ExitCode)." }
+                        Write-Host "Dynamic memory applied: $bounds."
+                    }
+                    if ($wasRunning) { Start-VibeboxInstance -Name $target -Config $config | Out-Null }
+                    exit 0
+                }
+                default { throw "Unknown memory operation $Subcommand. Use show or apply." }
+            }
         }
         "update" {
             $config = Get-VibeboxConfig -CreateIfMissing
