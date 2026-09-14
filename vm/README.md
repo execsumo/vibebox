@@ -222,50 +222,90 @@ here shows as roughly 1.9 GiB. That is expected, not a misconfiguration.
 
 ## Updating
 
+`update` upgrades the operating system packages and the pre-installed toolchain.
+It runs from either side and both forms execute the same
+`/opt/vibebox/update.sh`, so they cannot drift.
+
 From inside the guest:
 
 ```bash
-update           # OS packages and toolchain
-update tools     # toolchain only -- fast, safe mid-session
-update os        # apt only
+update           # OS packages and toolchain (default)
+update tools     # toolchain only -- fast, safe to run mid-session
+update os        # apt packages only
+update --help
 ```
 
 From the Windows host:
 
 ```powershell
 .\vm\host\vibebox.ps1 update              # OS packages and toolchain
-.\vm\host\vibebox.ps1 update -ToolsOnly   # toolchain only; fast, mid-session safe
+.\vm\host\vibebox.ps1 update -ToolsOnly   # toolchain only
 .\vm\host\vibebox.ps1 update -OsOnly      # apt only
 ```
 
-The legacy container had two commands for this: `update` for tools and
-`update-image` for the OS. It skipped APT deliberately, because a system
-upgrade was slow and its results were discarded by the next
-`docker compose down/up`. **A VM persists, so that split buys nothing** and one
-command covers both.
+### What each mode touches
 
-Both forms run the same `/opt/vibebox/update.sh`, so they cannot drift.
-Guest commands live in `vm/guest/bin/` and are installed to `/usr/local/bin`
-by provisioning.
+| Mode | Does |
+|---|---|
+| `os` | `apt-get update`, `apt-get upgrade`, `autoremove`, `clean`. Not `full-upgrade` -- that can *remove* packages to resolve dependencies, which is not a decision an update should make unattended. |
+| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Records resolved versions in `manifest.lock`. |
+| `all` | Both, in that order. |
 
-The container-era shims for `npm`, `pip3`, `systemctl` and `tailscale` are
-deliberately **not** carried over. They existed to give friendly errors on a
-box with no init; a VM has the real thing, and shadowing a real CLI is exactly
-what the design forbids.
+`update` does **not** touch the OS contract: it never changes the Ubuntu
+release, the guest user, or anything set at create time. Those need
+`vibebox rebuild`.
 
-Tool updates run through `guest/provision/30-tools`, the same code path
-`provision` uses, so the two cannot drift about how a tool is installed. With
-`TOOLS_UPDATE_POLICY=locked` the toolchain is pinned to `manifest.lock` and this
-becomes a no-op for tools.
+### Version policy
 
-`update` reports what actually changed -- package version deltas and tool
-version deltas -- rather than scrolling raw apt output.
+With `TOOLS_UPDATE_POLICY=latest` (the default) each tool is reinstalled at its
+newest version. npm globals are reinstalled at `@latest` rather than
+`npm update -g`, because for globals npm stays inside the semver range the
+package was installed under and never crosses a major -- and these CLIs move
+majors.
 
-**It never restarts anything.** `needrestart` runs in list-only mode during the
-upgrade, because restarting `dbus` or `sshd` mid-command kills the channel the
-command arrived on: the upgrade succeeds while the caller sees a failure. Any
-service needing a restart, and any pending reboot, is reported for you to action
-with `vibebox restart`.
+With `TOOLS_UPDATE_POLICY=locked` the toolchain is pinned to `manifest.lock`
+and the tools half becomes a no-op.
+
+### Output
+
+It reports what actually changed rather than scrolling raw apt output:
+
+```
+== changes ==
+packages upgraded:
+  libc6: 2.39-0ubuntu8.8 -> 2.39-0ubuntu8.9
+  perl:  5.38.2-3.2ubuntu0.3 -> 5.38.2-3.2ubuntu0.4
+tools:
+  was: hermes = "Hermes Agent v0.21.2 · upstream bdb14f5f"
+  now: hermes = "Hermes Agent v0.21.2 · upstream a8843ab9"
+services needing restart: vibebox-hermes-gateway@herwin.service
+run: vibebox restart
+reboot required: linux-image-generic
+```
+
+### It never restarts anything
+
+`needrestart` runs in **list-only** mode during the upgrade. Restarting `dbus`
+or `sshd` mid-command kills the channel the command arrived on, so the upgrade
+succeeds while the caller sees a failure -- which is exactly what happened the
+first time this ran. Services needing a restart, and any pending reboot, are
+reported for you to action with `vibebox restart`.
+
+A kernel or libc upgrade sets `reboot required`. Nothing reboots on its own.
+
+### Why one command, when legacy had two
+
+The container had `update` for tools and `update-image` for the OS, and skipped
+APT deliberately: a system upgrade was slow *and its results were discarded by
+the next `docker compose down/up`*. **A VM persists, so that split buys
+nothing.**
+
+Guest commands live in `vm/guest/bin/` and provisioning installs them to
+`/usr/local/bin`. The container-era shims for `npm`, `pip3`, `systemctl` and
+`tailscale` are deliberately **not** carried over -- they existed to print
+friendly errors on a box with no init, and shadowing a real CLI is what the
+design forbids.
+
 
 ## Tailnet URLs
 
