@@ -4,6 +4,8 @@ $script:VibeboxConfigKeys = @(
     "VM_NAME",
     "UBUNTU_RELEASE",
     "VM_CPUS",
+    "VM_MEMORY_MIN",
+    "VM_MEMORY_STARTUP",
     "VM_MEMORY",
     "VM_DISK",
     "GUEST_USER",
@@ -157,7 +159,11 @@ function Assert-VibeboxConfig {
     if (-not [int]::TryParse($v.VM_CPUS, [ref]$cpus) -or $cpus -lt 1) {
         throw "VM_CPUS must be a positive integer."
     }
-    $null = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY -Name "VM_MEMORY"
+    $minBytes = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY_MIN -Name "VM_MEMORY_MIN"
+    $startBytes = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY_STARTUP -Name "VM_MEMORY_STARTUP"
+    $maxBytes = ConvertTo-VibeboxSizeBytes -Value $v.VM_MEMORY -Name "VM_MEMORY"
+    if ($minBytes -gt $startBytes) { throw "VM_MEMORY_MIN cannot exceed VM_MEMORY_STARTUP." }
+    if ($startBytes -gt $maxBytes) { throw "VM_MEMORY_STARTUP cannot exceed VM_MEMORY." }
     $null = ConvertTo-VibeboxSizeBytes -Value $v.VM_DISK -Name "VM_DISK"
     $null = ConvertTo-VibeboxBoolean -Value $v.GUEST_UFW -Name "GUEST_UFW"
     if ($v.GUEST_USER -notmatch '^[a-z_][a-z0-9_-]{0,31}$') {

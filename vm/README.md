@@ -189,6 +189,37 @@ Password authentication is disabled on the network path (`ssh_pwauth: false`
 plus a hardening drop-in). The console keeps password auth as the rescue path,
 which is what the rescue password in `vm/state/rescue/` is for.
 
+## Memory
+
+```ini
+VM_MEMORY_MIN=1G        # Hyper-V reclaims down to this
+VM_MEMORY_STARTUP=2G    # what the guest boots with
+VM_MEMORY=4G            # ceiling it can grow to
+```
+
+These are Hyper-V **dynamic memory** bounds. `create` and `rebuild` apply them
+automatically while the instance is stopped. To change them on an existing VM:
+
+```powershell
+.\vm\host\vibebox.ps1 memory show     # configured vs live
+.\vm\host\vibebox.ps1 memory apply    # stops, applies, restarts
+```
+
+**This is the one thing that needs an elevated shell.** Multipass sets a fixed
+`--memory` at launch and cannot configure dynamic memory, so Hyper-V has to be
+asked directly and `Set-VM` requires administrator. `memory apply` requests
+elevation for that single call rather than making you open an admin shell; if
+`create` runs unelevated it warns that the bounds were not applied and names
+the command, rather than failing the create.
+
+Dynamic memory is a real trade-off, not free: the guest boots at the startup
+size and grows under pressure, which suits a box that idles most of the time,
+but ballooning can hurt workloads that allocate aggressively. Setting all three
+values equal gives static allocation.
+
+`MemTotal` in the guest reflects the **startup** value, not the maximum -- 2G
+here shows as roughly 1.9 GiB. That is expected, not a misconfiguration.
+
 ## Updating
 
 ```powershell
