@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# In-guest entry point for updating the OS packages and the toolchain.
+#
+# The legacy container shipped /usr/local/bin/update for this. The VM keeps the
+# same habit: `update` works from inside the box, and `vibebox update` does the
+# same thing from the Windows host. Both run the identical script, so they
+# cannot drift.
+
+set -Eeuo pipefail
+
+CONFIG_FILE=${VIBEBOX_CONFIG_FILE:-/etc/vibebox/vibebox.env}
+MODE=all
+
+usage() {
+    cat <<'USAGE'
+Usage: update [all|tools|os]
+
+  all     operating system packages and the toolchain (default)
+  tools   toolchain only -- fast, safe to run mid-session
+  os      apt packages only
+
+Nothing is restarted automatically. Services needing a restart, and any
+pending reboot, are reported at the end.
+USAGE
+}
+
+case "${1:-all}" in
+    all|tools|os) MODE=${1:-all} ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) printf 'unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 1 ;;
+esac
+
+[[ -r "$CONFIG_FILE" ]] || {
+    printf 'configuration file is not readable: %s\n' "$CONFIG_FILE" >&2
+    exit 1
+}
+
+exec sudo -n /opt/vibebox/update.sh "$CONFIG_FILE" "$MODE"
