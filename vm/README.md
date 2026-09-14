@@ -222,6 +222,16 @@ here shows as roughly 1.9 GiB. That is expected, not a misconfiguration.
 
 ## Updating
 
+From inside the guest:
+
+```bash
+update           # OS packages and toolchain
+update tools     # toolchain only -- fast, safe mid-session
+update os        # apt only
+```
+
+From the Windows host:
+
 ```powershell
 .\vm\host\vibebox.ps1 update              # OS packages and toolchain
 .\vm\host\vibebox.ps1 update -ToolsOnly   # toolchain only; fast, mid-session safe
@@ -233,6 +243,15 @@ The legacy container had two commands for this: `update` for tools and
 upgrade was slow and its results were discarded by the next
 `docker compose down/up`. **A VM persists, so that split buys nothing** and one
 command covers both.
+
+Both forms run the same `/opt/vibebox/update.sh`, so they cannot drift.
+Guest commands live in `vm/guest/bin/` and are installed to `/usr/local/bin`
+by provisioning.
+
+The container-era shims for `npm`, `pip3`, `systemctl` and `tailscale` are
+deliberately **not** carried over. They existed to give friendly errors on a
+box with no init; a VM has the real thing, and shadowing a real CLI is exactly
+what the design forbids.
 
 Tool updates run through `guest/provision/30-tools`, the same code path
 `provision` uses, so the two cannot drift about how a tool is installed. With

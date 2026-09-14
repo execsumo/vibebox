@@ -48,6 +48,19 @@ else
     printf 'optional service skipped: Hermes WebUI is not installed\n' >&2
 fi
 
+# In-guest commands on PATH. The legacy container shipped these in
+# /usr/local/bin; the VM keeps the ones that still make sense. Deliberately
+# absent are the shims that faked npm/pip3/systemctl/tailscale for a box with
+# no init -- a VM has the real thing, and shadowing a real CLI is exactly what
+# the design forbids.
+if [[ -d "$ROOT/bin" ]]; then
+    for cmd in "$ROOT/bin"/*; do
+        [[ -f "$cmd" ]] || continue
+        install -m 0755 "$cmd" "/usr/local/bin/$(basename "$cmd")"
+    done
+    echo "guest commands installed: $(ls "$ROOT/bin" | xargs)"
+fi
+
 # Clear stale failure counters before touching units. A unit that hit its
 # start limit refuses `systemctl start` until it is reset, so without this a
 # re-provision that fixes the underlying problem still looks broken.
