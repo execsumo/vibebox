@@ -73,8 +73,34 @@ must grant each service before it can obtain a name and certificate.
 
 ## Updates and rebuilds
 
-`vibebox update` updates the guest toolchain according to
-`TOOLS_UPDATE_POLICY`; it does not silently change the OS contract.
+`update` upgrades the OS packages and the toolchain. It runs from inside the
+guest or from the host, and both execute the same `/opt/vibebox/update.sh`:
+
+```bash
+update            # in the guest: apt + toolchain
+update tools      # toolchain only -- safe mid-session
+update os         # apt only
+```
+
+```powershell
+.\vm\host\vibebox.ps1 update [-ToolsOnly|-OsOnly]
+```
+
+It uses `apt-get upgrade`, never `full-upgrade`: full-upgrade may remove
+packages to satisfy dependencies, which an unattended update should not
+decide. The toolchain half re-runs `provision/30-tools`, so `update` and
+`provision` cannot disagree about how a tool is installed, and
+`TOOLS_UPDATE_POLICY=locked` pins it to `manifest.lock`.
+
+It does not silently change the OS contract -- release, guest user and other
+create-time settings need `vibebox rebuild`.
+
+**Nothing is restarted.** `needrestart` runs in list-only mode, because
+restarting `dbus` or `sshd` mid-command kills the channel the command arrived
+on: the upgrade succeeds while the caller sees a failure. Services needing a
+restart and any pending reboot are reported; action them with
+`vibebox restart`.
+
 `vibebox provision` re-runs all idempotent guest phases. `vibebox rebuild`
 creates a clean official Ubuntu guest and provisions it again. Restore user
 data only after inspecting a dry run.
