@@ -64,6 +64,22 @@ notepad .\vm\vibebox.env
 `vibebox rebuild -Confirm` and restore. `vibebox status` reports create-time
 drift so the file and the live VM never disagree silently.
 
+`VM_MEMORY` (with its `VM_MEMORY_MIN` / `VM_MEMORY_STARTUP` bounds) is the one
+exception with a non-destructive path. After editing the file:
+
+```powershell
+.\vm\host\vibebox.ps1 memory show    # configured bounds vs. the live Hyper-V values
+.\vm\host\vibebox.ps1 memory apply   # stops the VM, applies the new dynamic-memory
+                                      # bounds via Hyper-V, restarts it
+```
+
+This never touches the virtual disk, so it's the right tool for a
+memory-only change -- no `rebuild`, no backup/restore, user state untouched.
+It may prompt for elevation once, since setting Hyper-V dynamic memory
+requires it. `VM_CPUS` and `VM_DISK` have no equivalent live-apply command;
+changing either still means the destructive `rebuild` path above (back up
+first if the VM holds real data you want to keep).
+
 Guest policy (`GUEST_UFW`, `GUEST_SWAP_GB`, `GUEST_TIMEZONE`, `NODE_MAJOR`,
 `TOOLS_*`) applies any time via `vibebox provision`, which is idempotent.
 
