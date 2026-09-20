@@ -264,7 +264,7 @@ From the Windows host:
 | Mode | Does |
 |---|---|
 | `os` | `apt-get update`, `apt-get upgrade`, `autoremove`, `clean`. Not `full-upgrade` -- that can *remove* packages to resolve dependencies, which is not a decision an update should make unattended. |
-| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Records resolved versions in `manifest.lock`. |
+| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Existing Hermes installs use `hermes update`; managed Hermes gateway and WebUI services are restarted afterward. Records resolved versions in `manifest.lock`. |
 | `all` | Both, in that order. |
 
 `update` does **not** touch the OS contract: it never changes the Ubuntu
@@ -273,11 +273,12 @@ release, the guest user, or anything set at create time. Those need
 
 ### Version policy
 
-With `TOOLS_UPDATE_POLICY=latest` (the default) each tool is reinstalled at its
-newest version. npm globals are reinstalled at `@latest` rather than
-`npm update -g`, because for globals npm stays inside the semver range the
-package was installed under and never crosses a major -- and these CLIs move
-majors.
+With `TOOLS_UPDATE_POLICY=latest` (the default) each tool is updated to its
+newest version. Existing Hermes installs use `hermes update` rather than the
+bootstrap installer; the installer is used only when Hermes is missing. npm
+globals are reinstalled at `@latest` rather than `npm update -g`, because for
+globals npm stays inside the semver range the package was installed under and
+never crosses a major -- and these CLIs move majors.
 
 With `TOOLS_UPDATE_POLICY=locked` the toolchain is pinned to `manifest.lock`
 and the tools half becomes a no-op.
@@ -299,15 +300,17 @@ run: vibebox restart
 reboot required: linux-image-generic
 ```
 
-### It never restarts anything
+### Restart behavior
 
-`needrestart` runs in **list-only** mode during the upgrade. Restarting `dbus`
-or `sshd` mid-command kills the channel the command arrived on, so the upgrade
-succeeds while the caller sees a failure -- which is exactly what happened the
-first time this ran. Services needing a restart, and any pending reboot, are
-reported for you to action with `vibebox restart`.
+APT services are not restarted automatically. `needrestart` runs in
+**list-only** mode during the upgrade because restarting `dbus` or `sshd`
+mid-command kills the channel the command arrived on. After `hermes update`,
+the managed Hermes gateway and WebUI services are restarted so they load the
+new code; the WebUI's Tailscale Service continues to target port 8787.
 
-A kernel or libc upgrade sets `reboot required`. Nothing reboots on its own.
+Other services needing a restart, and any pending reboot, are reported for you
+to action with `vibebox restart`. A kernel or libc upgrade sets `reboot
+required`; nothing reboots on its own.
 
 ### Why one command, when legacy had two
 

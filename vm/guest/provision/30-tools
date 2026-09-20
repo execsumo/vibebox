@@ -83,6 +83,36 @@ enabled_optional() {
     return 1
 }
 
+restart_hermes_services() {
+    local unit
+    for unit in \
+        "vibebox-hermes-gateway@$GUEST_USER.service" \
+        "vibebox-hermes-webui@$GUEST_USER.service"; do
+        if systemctl is-enabled --quiet "$unit" || systemctl is-active --quiet "$unit"; then
+            printf 'restarting %s\n' "$unit"
+            systemctl restart "$unit"
+        fi
+    done
+}
+
+update_hermes() {
+    if command -v hermes >/dev/null 2>&1; then
+        # The installer also updates an existing checkout, but `hermes update`
+        # avoids repeating its bootstrap work and preserves the managed install.
+        if hermes update --yes; then
+            restart_hermes_services
+        else
+            printf 'optional: Hermes update failed; leaving the current install in place\n' >&2
+        fi
+        return 0
+    fi
+
+    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || true
+    if [[ -x /root/.local/bin/hermes ]]; then
+        install -m 0755 /root/.local/bin/hermes /usr/local/bin/hermes
+    fi
+}
+
 install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key |
     gpg --batch --yes --dearmor -o /etc/apt/keyrings/nodesource.gpg
@@ -144,10 +174,7 @@ else
     if enabled_optional agy && [[ -x /root/.local/bin/agy ]]; then
         install -m 0755 /root/.local/bin/agy /usr/local/bin/agy
     fi
-    enabled_optional hermes && curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || true
-    if enabled_optional hermes && [[ -x /root/.local/bin/hermes ]]; then
-        install -m 0755 /root/.local/bin/hermes /usr/local/bin/hermes
-    fi
+    enabled_optional hermes && update_hermes
 
     # Infisical is the secret store for this box, so it is installed from its
     # own apt repository rather than depending on a binary that happened to be

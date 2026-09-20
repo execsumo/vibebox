@@ -89,17 +89,19 @@ update os         # apt only
 It uses `apt-get upgrade`, never `full-upgrade`: full-upgrade may remove
 packages to satisfy dependencies, which an unattended update should not
 decide. The toolchain half re-runs `provision/30-tools`, so `update` and
-`provision` cannot disagree about how a tool is installed, and
-`TOOLS_UPDATE_POLICY=locked` pins it to `manifest.lock`.
+`provision` cannot disagree about how a tool is installed. Existing Hermes
+installs use `hermes update` instead of the bootstrap installer, and the
+managed Hermes gateway and WebUI are restarted after a successful Hermes
+update. `TOOLS_UPDATE_POLICY=locked` pins tools to `manifest.lock`.
 
 It does not silently change the OS contract -- release, guest user and other
 create-time settings need `vibebox rebuild`.
 
-**Nothing is restarted.** `needrestart` runs in list-only mode, because
-restarting `dbus` or `sshd` mid-command kills the channel the command arrived
-on: the upgrade succeeds while the caller sees a failure. Services needing a
-restart and any pending reboot are reported; action them with
-`vibebox restart`.
+APT services are not restarted automatically. `needrestart` runs in list-only
+mode, because restarting `dbus` or `sshd` mid-command kills the channel the
+command arrived on: the upgrade succeeds while the caller sees a failure.
+Other services needing a restart and any pending reboot are reported; action
+them with `vibebox restart`.
 
 `vibebox provision` re-runs all idempotent guest phases. `vibebox rebuild`
 creates a clean official Ubuntu guest and provisions it again. Restore user
