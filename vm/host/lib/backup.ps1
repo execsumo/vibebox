@@ -206,14 +206,36 @@ function Invoke-VibeboxRestore {
         Invoke-VibeboxMultipass -Arguments @("transfer", $resolved, "${Name}:$remoteArchive") -TimeoutSeconds 3600 | Out-Null
         $extract = @'
 set -Eeuo pipefail
-units=(docker.service vibebox-tailnet.service vibebox-hermes-gateway@__VIBEBOX_USER__.service vibebox-droid-daemon@__VIBEBOX_USER__.service vibebox-hermes-webui@__VIBEBOX_USER__.service)
+# docker.socket too: stopping docker.service alone lets socket activation
+# start it again in the middle of the extract.
+units=(docker.socket docker.service vibebox-tailnet.service vibebox-hermes-gateway@__VIBEBOX_USER__.service vibebox-droid-daemon@__VIBEBOX_USER__.service vibebox-hermes-webui@__VIBEBOX_USER__.service)
 for unit in "${units[@]}"; do systemctl stop "$unit" || true; done
 # Restart the units and drop the multi-GB archive copy whether or not the
 # restore succeeds; a failed run must not leave either behind.
 archive='__VIBEBOX_ARCHIVE__'
+root=/
+home="${root%/}/home/__VIBEBOX_USER__"
 trap 'for unit in "${units[@]}"; do systemctl start "$unit" || true; done; rm -f "$archive"' EXIT
-tar --extract --gzip --file "$archive" --directory / --no-same-owner   --transform 's|^home/__VIBEBOX_SOURCE_USER__$|home/__VIBEBOX_USER__|'   --transform 's|^home/__VIBEBOX_SOURCE_USER__/|home/__VIBEBOX_USER__/|'
-chown -R '__VIBEBOX_USER__:__VIBEBOX_USER__' /home/__VIBEBOX_USER__
+
+# Provisioning can create a real directory where the backup holds a symlink
+# or a file -- a dotfiles-managed ~/.hermes, for one. tar cannot replace a
+# non-empty directory, so move each such directory aside first (kept, never
+# deleted) and let the archive's entry take the path.
+stamp=$(date +%Y%m%d-%H%M%S)
+while IFS= read -r name; do
+  case "$name" in */) continue ;; esac
+  dest="$home${name#home/__VIBEBOX_SOURCE_USER__}"
+  if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+    mv -- "$dest" "$dest.pre-restore-$stamp"
+    echo "moved aside $dest -> $dest.pre-restore-$stamp (the archive has a non-directory there)"
+  fi
+done < <(tar --list --gzip --file "$archive")
+
+status=0
+tar --extract --gzip --file "$archive" --directory "$root" --no-same-owner   --transform 's|^home/__VIBEBOX_SOURCE_USER__$|home/__VIBEBOX_USER__|'   --transform 's|^home/__VIBEBOX_SOURCE_USER__/|home/__VIBEBOX_USER__/|' || status=$?
+# Re-own even after a partial extract: --no-same-owner leaves root owning
+# everything tar wrote, and a root-owned home locks the user out of it.
+chown -R '__VIBEBOX_USER__:__VIBEBOX_USER__' "$home"
 # A cross-account restore leaves absolute symlinks pointing at the old home.
 # Retarget them, or every dotfile link silently dangles.
 if [ '__VIBEBOX_SOURCE_USER__' != '__VIBEBOX_USER__' ]; then
@@ -228,8 +250,12 @@ if [ '__VIBEBOX_SOURCE_USER__' != '__VIBEBOX_USER__' ]; then
         retargeted=$((retargeted + 1))
         ;;
     esac
-  done < <(find /home/__VIBEBOX_USER__ -type l)
+  done < <(find "$home" -type l)
   echo "retargeted $retargeted absolute symlink(s) to /home/__VIBEBOX_USER__"
+fi
+if [ "$status" -ne 0 ]; then
+  echo "tar exited $status; entries it could extract were restored and re-owned" >&2
+  exit "$status"
 fi
 '@
         $extract = $extract.Replace("__VIBEBOX_SOURCE_USER__", $SourceUser).
@@ -237,7 +263,9 @@ fi
             Replace("__VIBEBOX_ARCHIVE__", $remoteArchive)
         $extract = $extract -replace "`r`n", "`n"
         # Extracting and re-owning a multi-GB home outlasts the 300s default.
-        Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $extract) -TimeoutSeconds 3600 | Out-Null
+        $result = Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $extract) -TimeoutSeconds 3600
+        # Surface what moved aside and what was retargeted; both matter.
+        $result.Output | ForEach-Object { Write-Host "  $_" }
         Write-Host "Restored $(($entries | Measure-Object).Count) archive entries into '$Name' as '$targetUser'."
     } finally {
         if (-not $wasRunning) {
