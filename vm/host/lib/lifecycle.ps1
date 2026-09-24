@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "config.ps1")
 . (Join-Path $PSScriptRoot "preflight.ps1")
 . (Join-Path $PSScriptRoot "sshconfig.ps1")
+. (Join-Path $PSScriptRoot "hostnet.ps1")
 
 function Invoke-VibeboxMultipass {
     param(
@@ -213,7 +214,7 @@ function Assert-VibeboxManagedTarget {
     }
     $marker = Get-VibeboxInstanceMarker -Name $Name
     if ([string]$marker.state -ne "ready") {
-        throw "Instance '$Name' is still being created. Refusing to operate on an unverified target."
+        throw "Instance '$Name' did not finish being created. Run 'vibebox create' to resume it; it picks up where the interrupted create or rebuild stopped."
     }
     $info = Get-VibeboxInstanceInfo -Name $Name
     if ($null -eq $info) {
@@ -398,6 +399,9 @@ function New-VibeboxInstance {
     )
 
     $name = $Config.Values.VM_NAME
+    # Before anything that talks to Multipass: with a stale name entry, both
+    # the fresh and the resume paths below would hang on "Starting".
+    Assert-VibeboxHostNetwork -Name $name
     if (Test-VibeboxManagedInstance -Name $name) {
         $marker = Get-VibeboxInstanceMarker -Name $name
         if ([string]$marker.state -eq "ready") {
@@ -481,7 +485,20 @@ function New-VibeboxInstance {
         "--disk", $Config.Values.VM_DISK,
         "--cloud-init", $userDataPath
     )
-    Invoke-VibeboxMultipass -Arguments $launchArgs | Out-Null
+    try {
+        Invoke-VibeboxMultipass -Arguments $launchArgs | Out-Null
+    } catch {
+        # A launch that times out usually leaves a booted instance behind; only
+        # Multipass's wait for SSH gave up. Carry on with it rather than
+        # stranding a half-built VM. The "creating" marker stays until the end,
+        # so if this fails too, re-running create resumes instead of starting over.
+        $launchError = $_.Exception.Message
+        $health = Get-VibeboxHostNetworkHealth -Name $name
+        if (-not $health.Ok) {
+            throw "multipass launch did not complete: $launchError`n$($health.Detail) Then run 'vibebox create' again; it resumes this instance."
+        }
+        Write-Warning "multipass launch did not complete cleanly ($launchError). Continuing with the instance it created; if this fails, 'vibebox create' resumes it."
+    }
     # Capture the Hyper-V identity immediately after launch. If provisioning
     # is interrupted later, resume only from a marker bound to this VM.
     Save-VibeboxInstanceMarker -Name $name -Config $Config -ImageHash "" -State creating
@@ -497,13 +514,27 @@ function New-VibeboxInstance {
 
 function Start-VibeboxInstance {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)]$Config)
+    # First, before any Multipass call that a stale name entry could hang.
+    Assert-VibeboxHostNetwork -Name $Name
     Assert-VibeboxManagedTarget -Name $Name
     $info = Get-VibeboxInstanceInfo -Name $Name
     if ($null -eq $info) { throw "Instance '$Name' was not found." }
     if ($info.State -eq "RUNNING") {
         Write-Host "Instance '$Name' is already running."
     } else {
-        Invoke-VibeboxMultipass -Arguments @("start", $Name) | Out-Null
+        try {
+            Invoke-VibeboxMultipass -Arguments @("start", $Name) | Out-Null
+        } catch {
+            # Turn a bare timeout into a diagnosis. The guest is almost always
+            # up by now; what failed is Multipass reaching it.
+            $health = Get-VibeboxHostNetworkHealth -Name $Name
+            $hint = if (-not $health.Ok) {
+                $health.Detail
+            } else {
+                "Name resolution looks healthy, so multipassd itself is probably wedged. 'vibebox hostnet repair' restarts it (one UAC prompt)."
+            }
+            throw "$($_.Exception.Message)`n$hint"
+        }
     }
     $info = Wait-VibeboxInstance -Name $Name -TimeoutSeconds ([int]$Config.Values.READINESS_TIMEOUT_SEC)
     Update-VibeboxSshAlias -Name $Name -User $Config.Values.GUEST_USER -Address $info.IPv4 | Out-Null

@@ -26,7 +26,9 @@ installed. No VM is claimed to exist.
 
 Windows PowerShell 5.1 is not supported. Open PowerShell 7 (`pwsh`) and run
 the commands below. **No elevation is required.** Multipass drives Hyper-V
-through its own daemon, which already runs as a LocalSystem service.
+through its own daemon, which already runs as a LocalSystem service. The
+exceptions are `memory apply`, `hostnet repair` and `hostnet enable|disable`.
+Each asks for elevation itself, with a single UAC prompt, for just that step.
 
 ## Lifecycle
 
@@ -46,6 +48,38 @@ process first if the stop hangs, which it does when the daemon is stuck:
 ```powershell
 taskkill /F /T /IM multipassd.exe; Start-Service Multipass
 ```
+
+### After a host reboot: "Starting" forever
+
+Multipass reaches the guest by `vibebox.mshome.net`, a name Windows Internet
+Connection Sharing serves from `%windir%\System32\drivers\etc\hosts.ics`. The
+Default Switch gets a new subnet at every boot, but ICS keeps serving the
+previous boot's unexpired lease for the same name. Multipass dials the dead
+address and sits on "Starting" while the guest, already up with a fresh
+lease, waits. Destroying and rebuilding the VM does not help, because the stale
+entry belongs to the name, not the VM.
+
+`create`, `start`, `ssh`, `doctor` and `status` check for this first and fail
+within a second, naming the stale address. The fix is one elevated step (a
+single UAC prompt). It removes dead and superseded entries from `hosts.ics`,
+restarts ICS and `multipassd`, and brings the VM back up:
+
+```powershell
+.\vm\host\vibebox.ps1 hostnet repair
+```
+
+To stop this happening at all, install the boot guard once. It is a SYSTEM
+startup task that does the same cleanup before anything dials the name:
+
+```powershell
+.\vm\host\vibebox.ps1 hostnet enable     # hostnet disable removes it
+.\vm\host\vibebox.ps1 hostnet status
+```
+
+The guard's script is installed under `%ProgramData%\Vibebox`, which is locked
+to administrators. It never runs from the checkout, because that is user-writable.
+If a `create` or `rebuild` was cut short, running `create` again resumes it.
+`status` reports an unfinished creation as the `creation` check.
 
 ## Configuration changes
 
@@ -427,8 +461,12 @@ for that tag -- tagged nodes do not expire.
 
 **Known open items.**
 
-- No host reboot, sleep/resume, or multi-day soak has been run. Post-resume
-  clock skew and Tailscale reconnect are the untested failure modes.
+- The first host reboot (2026-09-23) broke `start` through stale ICS leases in
+  `hosts.ics`, not through anything in the guest; see "After a host reboot"
+  above. `hostnet repair` and the `hostnet enable` boot guard came out of
+  that. Neither has been run through a real reboot yet, and sleep/resume and a
+  multi-day soak are still untested. Post-resume clock skew and Tailscale
+  reconnect are the other open failure modes.
 - Backup and restore have not been exercised end to end against this data.
   `restore` gained cross-account rename support that the migration used, but
   the full backup → rebuild → restore loop is unproven.

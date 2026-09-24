@@ -113,6 +113,13 @@ data only after inspecting a dry run.
 .\vm\host\vibebox.ps1 console
 ```
 
+If `start` or `create` sits on "Starting" or fails with `Host network
+preflight failed`, the guest is almost certainly fine. The cause is a stale
+`<name>.mshome.net` lease in ICS's `hosts.ics`, usually left by a host reboot.
+Run `vibebox hostnet repair` (one UAC prompt), then `vibebox hostnet enable`
+once so later reboots clean it up automatically. `vibebox hostnet status`
+shows both. The README section "After a host reboot" has the full mechanism.
+
 Inside the guest, use `systemctl --failed`, `journalctl -b`, `ss -tlnp`,
 `docker info`, `tailscale status`, and `df -h`. GPU is intentionally reported
 as `none`; GPU workloads stay on the Windows Docker Desktop/WSL2 path.

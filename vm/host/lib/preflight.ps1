@@ -75,6 +75,11 @@ function Get-VibeboxPreflightResults {
     }
     $null = $results.Add([pscustomobject]@{ Id = "multipass-daemon"; Ok = $daemonOk; Detail = $daemonDetail })
 
+    # A stale <name>.mshome.net entry hangs create and start on "Starting"
+    # indefinitely. Catch it here in a second instead of after a 300s timeout.
+    $hostnet = Get-VibeboxHostNetworkHealth -Name $Config.Values.VM_NAME
+    $null = $results.Add([pscustomobject]@{ Id = "hostnet-dns"; Ok = $hostnet.Ok; Detail = $hostnet.Detail })
+
     # Hyper-V availability is proven by its services running, which any user can
     # read. Get-VM / Get-WindowsOptionalFeature need elevation and would only
     # re-answer the same question.
