@@ -109,6 +109,11 @@ function Get-VibeboxStatus {
         $null = $drift.Add("guest user was created as $($marker.guestUser), configuration requests $($Config.Values.GUEST_USER) (rebuild required)")
     }
 
+    # A half-finished create looks like a running VM, but nothing was
+    # provisioned into it. Say so instead of letting the tool checks imply it.
+    $creationComplete = $null -ne $marker -and [string]$marker.state -eq "ready"
+    $hostnet = Get-VibeboxHostNetworkHealth -Name $Name
+
     $sshReachable = $false
     if ($null -ne $info -and $info.IPv4) {
         $sshReachable = Test-NetConnection -ComputerName $info.IPv4 -Port 22 -InformationLevel Quiet -WarningAction SilentlyContinue
@@ -129,6 +134,8 @@ function Get-VibeboxStatus {
         ($null -eq $guest.clock.offsetSec -or [double]$guest.clock.offsetSec -le 2)
     $tailscaleOk = $null -ne $guest -and $guest.net.tailscale.state -eq "Running"
     $checks = @($mountChecks.ToArray()) + @(
+        [pscustomobject]@{ id = "creation"; ok = $creationComplete; detail = if ($creationComplete) { "creation completed" } else { "creation did not finish; run vibebox create to resume it" } }
+        [pscustomobject]@{ id = "hostnet-dns"; ok = $hostnet.Ok; detail = $hostnet.Detail }
         [pscustomobject]@{ id = "config-drift"; ok = ($drift.Count -eq 0); detail = if ($drift.Count) { $drift -join "; " } else { "no configuration drift" } }
         [pscustomobject]@{ id = "ssh"; ok = $sshReachable; detail = if ($sshReachable) { "SSH port is reachable" } else { "SSH port is not reachable" } }
         [pscustomobject]@{ id = "required-tools"; ok = ($requiredMissing.Count -eq 0); detail = if ($requiredMissing.Count) { "missing: $($requiredMissing -join ', ')" } else { "all required tools pass version checks" } }
@@ -137,7 +144,7 @@ function Get-VibeboxStatus {
         [pscustomobject]@{ id = "core-services"; ok = ($failedCoreServices.Count -eq 0); detail = if ($failedCoreServices.Count) { "failed: $(($failedCoreServices | ForEach-Object { $_.unit }) -join ', ')" } else { "core services are active" } }
         [pscustomobject]@{ id = "clock"; ok = $clockOk; detail = if ($clockOk) { "clock is synchronized" } else { "clock is not synchronized within tolerance" } }
     )
-    $ok = ($state -eq "running") -and ($drift.Count -eq 0) -and ($mounts.Count -eq 0) -and
+    $ok = ($state -eq "running") -and $creationComplete -and $hostnet.Ok -and ($drift.Count -eq 0) -and ($mounts.Count -eq 0) -and
         $sshReachable -and ($requiredMissing.Count -eq 0) -and $tailscaleOk -and ($tailnetDrift.Count -eq 0) -and
         ($failedCoreServices.Count -eq 0) -and $clockOk
 

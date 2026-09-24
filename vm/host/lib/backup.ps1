@@ -203,13 +203,16 @@ function Invoke-VibeboxRestore {
             Write-Host "Starting '$Name' temporarily for restore transfer."
             Start-VibeboxInstance -Name $Name -Config $Config | Out-Null
         }
-        Invoke-VibeboxMultipass -Arguments @("transfer", $resolved, "${Name}:$remoteArchive") | Out-Null
+        Invoke-VibeboxMultipass -Arguments @("transfer", $resolved, "${Name}:$remoteArchive") -TimeoutSeconds 3600 | Out-Null
         $extract = @'
 set -Eeuo pipefail
 units=(docker.service vibebox-tailnet.service vibebox-hermes-gateway@__VIBEBOX_USER__.service vibebox-droid-daemon@__VIBEBOX_USER__.service vibebox-hermes-webui@__VIBEBOX_USER__.service)
 for unit in "${units[@]}"; do systemctl stop "$unit" || true; done
-trap 'for unit in "${units[@]}"; do systemctl start "$unit" || true; done' EXIT
-tar --extract --gzip --file '__VIBEBOX_ARCHIVE__' --directory / --no-same-owner   --transform 's|^home/__VIBEBOX_SOURCE_USER__$|home/__VIBEBOX_USER__|'   --transform 's|^home/__VIBEBOX_SOURCE_USER__/|home/__VIBEBOX_USER__/|'
+# Restart the units and drop the multi-GB archive copy whether or not the
+# restore succeeds; a failed run must not leave either behind.
+archive='__VIBEBOX_ARCHIVE__'
+trap 'for unit in "${units[@]}"; do systemctl start "$unit" || true; done; rm -f "$archive"' EXIT
+tar --extract --gzip --file "$archive" --directory / --no-same-owner   --transform 's|^home/__VIBEBOX_SOURCE_USER__$|home/__VIBEBOX_USER__|'   --transform 's|^home/__VIBEBOX_SOURCE_USER__/|home/__VIBEBOX_USER__/|'
 chown -R '__VIBEBOX_USER__:__VIBEBOX_USER__' /home/__VIBEBOX_USER__
 # A cross-account restore leaves absolute symlinks pointing at the old home.
 # Retarget them, or every dotfile link silently dangles.
@@ -226,15 +229,15 @@ if [ '__VIBEBOX_SOURCE_USER__' != '__VIBEBOX_USER__' ]; then
         ;;
     esac
   done < <(find /home/__VIBEBOX_USER__ -type l)
-  echo "retargeted $retargeted absolute symlink(s) to /home/__VIBEBOX_USER__" 
+  echo "retargeted $retargeted absolute symlink(s) to /home/__VIBEBOX_USER__"
 fi
-rm -f '__VIBEBOX_ARCHIVE__'
 '@
         $extract = $extract.Replace("__VIBEBOX_SOURCE_USER__", $SourceUser).
-        $extract = $extract -replace "`r`n", "`n"
             Replace("__VIBEBOX_USER__", $targetUser).
             Replace("__VIBEBOX_ARCHIVE__", $remoteArchive)
-        Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $extract) | Out-Null
+        $extract = $extract -replace "`r`n", "`n"
+        # Extracting and re-owning a multi-GB home outlasts the 300s default.
+        Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "bash", "-lc", $extract) -TimeoutSeconds 3600 | Out-Null
         Write-Host "Restored $(($entries | Measure-Object).Count) archive entries into '$Name' as '$targetUser'."
     } finally {
         if (-not $wasRunning) {

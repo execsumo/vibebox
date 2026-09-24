@@ -37,6 +37,7 @@ $lib = Join-Path $PSScriptRoot "lib"
 . (Join-Path $lib "config.ps1")
 . (Join-Path $lib "preflight.ps1")
 . (Join-Path $lib "sshconfig.ps1")
+. (Join-Path $lib "hostnet.ps1")
 . (Join-Path $lib "lifecycle.ps1")
 . (Join-Path $lib "status.ps1")
 . (Join-Path $lib "secrets.ps1")
@@ -72,6 +73,7 @@ vibebox migrate [-Name] -Archive <path> -SourceUser <user> [-IncludeCaches] [-Dr
 vibebox conformance [-Name] [-Json]
 vibebox enroll <tailscale|github|hermes> [-KeyFrom <env-file>] [-Tag <tag:name>]
 vibebox tailnet <list|add|remove|apply>
+vibebox hostnet <status|repair|enable|disable> [-Name]
 "@
 }
 
@@ -377,6 +379,39 @@ try {
                     exit 0
                 }
                 default { throw "Unknown tailnet operation '$Subcommand'." }
+            }
+        }
+        "hostnet" {
+            $config = Get-VibeboxConfig -CreateIfMissing
+            $target = Resolve-VibeboxExistingName -Config $config
+            if ([string]::IsNullOrWhiteSpace($Subcommand)) { $Subcommand = "status" }
+            switch ($Subcommand.ToLowerInvariant()) {
+                "status" {
+                    $health = Show-VibeboxHostNetworkStatus -Name $target
+                    if (-not $health.Ok) { exit $ExitValidation }
+                    exit 0
+                }
+                "repair" {
+                    Invoke-VibeboxHostNetworkRepair -Name $target
+                    $health = Get-VibeboxHostNetworkHealth -Name $target
+                    if (-not $health.Ok) { throw "Host network repair did not clear the stale entries: $($health.Detail)" }
+                    Write-Host "Name resolution is clean."
+                    # Finish the job: bring the VM up on a fresh lease, or say
+                    # what the half-built one still needs.
+                    $marker = Get-VibeboxInstanceMarker -Name $target
+                    if ($null -eq $marker) {
+                        Write-Host "No Vibebox instance '$target' exists; nothing to start."
+                    } elseif ([string]$marker.state -ne "ready") {
+                        Write-Host "'$target' did not finish being created. Run 'vibebox create' to resume it."
+                    } else {
+                        $info = Start-VibeboxInstance -Name $target -Config $config
+                        Write-Host "Vibebox '$target' is running at $($info.IPv4)."
+                    }
+                    exit 0
+                }
+                "enable" { Enable-VibeboxHostNetworkGuard; exit 0 }
+                "disable" { Disable-VibeboxHostNetworkGuard; exit 0 }
+                default { throw "Unknown hostnet operation '$Subcommand'. Use status, repair, enable, or disable." }
             }
         }
         "conformance" {
