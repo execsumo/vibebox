@@ -211,8 +211,11 @@ function Invoke-VibeboxRestore {
         $extract = @'
 set -Eeuo pipefail
 # docker.socket too: stopping docker.service alone lets socket activation
-# start it again in the middle of the extract.
-units=(docker.socket docker.service vibebox-tailnet.service vibebox-hermes-gateway@__VIBEBOX_USER__.service vibebox-droid-daemon@__VIBEBOX_USER__.service vibebox-hermes-webui@__VIBEBOX_USER__.service)
+# start it again in the middle of the extract. The user's own services
+# (Hermes, WebUI, whatever they installed) all live under their user manager,
+# so stopping that one unit quiesces every process writing into the home
+# without vibebox having to know what the user runs. Linger starts it again.
+units=(docker.socket docker.service vibebox-tailnet.service "user@$(id -u '__VIBEBOX_USER__').service")
 for unit in "${units[@]}"; do systemctl stop "$unit" || true; done
 # Restart the units and drop the multi-GB archive copy whether or not the
 # restore succeeds; a failed run must not leave either behind.

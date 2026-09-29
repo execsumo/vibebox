@@ -31,6 +31,12 @@ usermod --append --groups sudo "$GUEST_USER"
 install -d -m 0750 -o "$GUEST_USER" -g "$GUEST_USER" "/home/$GUEST_USER"
 printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$GUEST_USER" > "/etc/sudoers.d/$GUEST_USER"
 chmod 0440 "/etc/sudoers.d/$GUEST_USER"
+# The account's own systemd user units (Hermes, WebUI, timers -- whatever the
+# user installs) only run while it has a login session unless it lingers.
+# Without this they stop at the last logout and stay down after every reboot
+# until someone SSHes in. Enabled here, before 30-tools, so an installer that
+# registers a user service has a user manager to talk to.
+loginctl enable-linger "$GUEST_USER"
 
 install -d -m 0755 /etc/vibebox
 install -m 0644 "$CONFIG_FILE" /etc/vibebox/vibebox.env
