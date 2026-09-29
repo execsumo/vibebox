@@ -57,11 +57,10 @@ guest_user = os.environ.get("GUEST_USER", "")
 def version(tool):
     try:
         args = ["go", "version"] if tool == "go" else [tool, "--version"]
-        if tool == "hermes":
-            # Hermes is a per-user install in the guest user's home, not on
-            # root's PATH; ask the copy the user actually runs.
-            args = ["runuser", "-u", guest_user, "--",
-                    f"/home/{guest_user}/.local/bin/hermes", "--version"]
+        if tool in ("hermes", "hermes-webui"):
+            # User apps live in the guest user's home, not on root's PATH;
+            # ask the copy the user actually runs.
+            args = ["/opt/vibebox/user-apps.sh", "version", guest_user, tool]
         result = subprocess.run(args, text=True, capture_output=True, timeout=10)
         return result.returncode == 0, (result.stdout or result.stderr).splitlines()[0] if result.returncode == 0 else ""
     except (OSError, subprocess.SubprocessError):

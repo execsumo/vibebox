@@ -52,6 +52,18 @@ for launcher in /usr/local/bin/hermes /usr/local/bin/hermes-*; do
 done
 systemctl daemon-reload
 
+# Platform maintenance: one pre-installed job, configured by the user through
+# MAINTENANCE_* in vibebox.env. It replaces ad-hoc daily/weekly jobs written
+# into this namespace by hand, which duplicated Ubuntu's unattended upgrades
+# and pruned Docker volumes -- a stopped stack's data.
+for retired in vibebox-system-daily vibebox-system-weekly; do
+    systemctl disable --now "$retired.timer" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$retired.timer" "/etc/systemd/system/$retired.service" \
+        "/usr/local/sbin/$retired"
+done
+systemctl daemon-reload
+"$ROOT/maintenance.sh" configure
+
 # In-guest commands on PATH. The legacy container shipped these in
 # /usr/local/bin; the VM keeps the ones that still make sense. Deliberately
 # absent are the shims that faked npm/pip3/systemctl/tailscale for a box with

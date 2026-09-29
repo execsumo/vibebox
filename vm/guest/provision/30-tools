@@ -83,41 +83,21 @@ enabled_optional() {
     return 1
 }
 
-guest_home="/home/$GUEST_USER"
-hermes_launcher="$guest_home/.local/bin/hermes"
+# User applications: pre-installed by vibebox, owned and configured by the
+# user. They live in the user's home and run as the user's own services;
+# guest/user-apps.sh installs each one once, when it is missing, and vibebox
+# never updates or supervises it afterwards. Updating one from here used to run
+# a second, root-owned copy that drifted from the one the user maintained.
+# Order matters: the WebUI needs Hermes.
+user_apps=(hermes hermes-webui)
+user_apps_helper="$ROOT/user-apps.sh"
 
-# Run a command as the guest user with a working user manager, so installers
-# that register systemd user services (Hermes' gateway) can reach it.
-as_guest_user() {
-    local uid
-    uid=$(id -u "$GUEST_USER")
-    for _ in $(seq 1 20); do
-        [[ -S "/run/user/$uid/bus" ]] && break
-        sleep 0.5
+is_user_app() {
+    local app
+    for app in "${user_apps[@]}"; do
+        [[ "$app" == "$1" ]] && return 0
     done
-    runuser -u "$GUEST_USER" -- env \
-        HOME="$guest_home" USER="$GUEST_USER" LOGNAME="$GUEST_USER" \
-        XDG_RUNTIME_DIR="/run/user/$uid" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-        PATH="$guest_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-        "$@"
-}
-
-# Hermes is the user's software, not vibebox's. It lives in their home, where
-# upstream's installer puts it, and they update it with `hermes update` and
-# restart it with `hermes gateway restart` -- the same as on any VPS. Vibebox
-# only offers a one-time install on a box that does not have it yet, and never
-# touches an existing install: updating or supervising it from here ran a
-# second, root-owned copy that drifted from the one the user maintained.
-install_hermes_if_missing() {
-    if [[ -x "$hermes_launcher" ]]; then
-        printf 'hermes: user install present; update it with `hermes update`\n'
-        return 0
-    fi
-    printf 'hermes: installing for %s with the upstream installer\n' "$GUEST_USER"
-    as_guest_user bash -c \
-        'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive' ||
-        printf 'optional: Hermes install failed; install it as %s with the upstream installer\n' "$GUEST_USER" >&2
+    return 1
 }
 
 install -d -m 0755 /etc/apt/keyrings
@@ -146,6 +126,7 @@ fi
 if [[ "$locked_manifest" == true ]]; then
     printf 'locked policy selected; optional tools remain at their recorded versions\n'
     for tool in "${optional_tools[@]}"; do
+        is_user_app "$tool" && continue
         if ! version=$(locked_value "$tool" 2>/dev/null); then
             printf 'optional tool %s is not present in the locked manifest; skipping\n' "$tool" >&2
             continue
@@ -181,7 +162,6 @@ else
     if enabled_optional agy && [[ -x /root/.local/bin/agy ]]; then
         install -m 0755 /root/.local/bin/agy /usr/local/bin/agy
     fi
-    enabled_optional hermes && install_hermes_if_missing
 
     # Infisical is the secret store for this box, so it is installed from its
     # own apt repository rather than depending on a binary that happened to be
@@ -196,20 +176,32 @@ else
         --extra-index-url https://download.pytorch.org/whl/cpu docling pdftotext || true
 fi
 
+# Outside the policy branch: a one-time install is not an update, so neither
+# policy governs it, and a locked box still gets the apps it was configured with.
+for app in "${user_apps[@]}"; do
+    enabled_optional "$app" || continue
+    "$user_apps_helper" install "$GUEST_USER" "$app" ||
+        printf 'optional: %s install failed; install it as %s with its upstream installer\n' "$app" "$GUEST_USER" >&2
+done
+
 version_for() {
+    if is_user_app "$1"; then
+        # Report the version the user actually runs, from their home.
+        "$user_apps_helper" version "$GUEST_USER" "$1"
+        return
+    fi
     case "$1" in
         go) go version ;;
-        # Per-user install: report the version the user actually runs.
-        hermes) as_guest_user "$hermes_launcher" --version 2>/dev/null ;;
         *) "$1" --version ;;
     esac
 }
 
 tool_present() {
-    case "$1" in
-        hermes) [[ -x "$hermes_launcher" ]] ;;
-        *) command -v "$1" >/dev/null 2>&1 ;;
-    esac
+    if is_user_app "$1"; then
+        "$user_apps_helper" present "$GUEST_USER" "$1"
+        return
+    fi
+    command -v "$1" >/dev/null 2>&1
 }
 
 missing_required=()
