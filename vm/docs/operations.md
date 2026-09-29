@@ -1,9 +1,14 @@
 # VM operations
 
 The host entry point is `vm/host/vibebox.ps1`. Run it from **PowerShell 7
-(`pwsh`) as Administrator** on the Windows host. Windows PowerShell 5.1 is not
-supported. The guest remains usable with ordinary Ubuntu commands:
-`systemctl`, `journalctl`, `apt`, `ss`, and the native Docker CLI.
+(`pwsh`)** on the Windows host. Windows PowerShell 5.1 is not supported. The
+guest remains usable with ordinary Ubuntu commands: `systemctl`, `journalctl`,
+`apt`, `ss`, and the native Docker CLI.
+
+Vibebox operates the platform; the applications it pre-installs (Hermes, the
+Hermes WebUI) are owned and configured by the guest user and never updated or
+supervised by these commands. See "What vibebox owns, and what you own" in the
+README.
 
 No lifecycle command requires an elevated shell. Multipass drives Hyper-V
 through its own LocalSystem daemon, and Vibebox proves instance ownership from
@@ -40,7 +45,8 @@ then `vibebox rebuild -Confirm` and restore from a backup. `vibebox status`
 reports create-time drift, so the file and the live VM never disagree
 silently. Guest policy (`GUEST_UFW`, `GUEST_SWAP_GB`, `GUEST_TIMEZONE`,
 `NODE_MAJOR`, `TOOLS_*`) applies any time via the idempotent
-`vibebox provision`.
+`vibebox provision`. Maintenance settings (`MAINTENANCE_*`) apply with
+`vibebox maintenance apply`, without re-provisioning.
 
 The shipped timezone is `America/Los_Angeles`. It is an IANA timezone and can
 be changed by provisioning.
@@ -56,7 +62,10 @@ Backups are host-initiated and use a restricted key:
 ```
 
 Restore is name-bound, refuses unsafe archive paths, maps ownership by Linux
-login name, and stops the guest's managed services while extracting. Backup
+login name, and while extracting stops Docker, the tailnet reconciler, and the
+guest user's systemd user manager -- which quiesces every application the user
+runs without vibebox needing to know what they are. Linger starts the user
+manager again afterwards. Backup
 archives without quiesce hooks are labeled crash-consistent.
 
 Tailnet names are tracked in `vm/guest/tailnet.d/` and reconciled through the
@@ -89,10 +98,11 @@ update os         # apt only
 It uses `apt-get upgrade`, never `full-upgrade`: full-upgrade may remove
 packages to satisfy dependencies, which an unattended update should not
 decide. The toolchain half re-runs `provision/30-tools`, so `update` and
-`provision` cannot disagree about how a tool is installed. It never touches
-Hermes or other software the user installed in their home -- that is updated
-with its own tooling (`hermes update`). `TOOLS_UPDATE_POLICY=locked` pins tools
-to `manifest.lock`.
+`provision` cannot disagree about how a tool is installed. It never updates
+Hermes, the WebUI, or other software in the user's home: those are
+pre-installed once and then owned by the user, who updates them with their own
+tooling (`hermes update`). See "What vibebox owns, and what you own" in the
+README. `TOOLS_UPDATE_POLICY=locked` pins tools to `manifest.lock`.
 
 It does not silently change the OS contract -- release, guest user and other
 create-time settings need `vibebox rebuild`.
@@ -102,6 +112,34 @@ mode, because restarting `dbus` or `sshd` mid-command kills the channel the
 command arrived on: the upgrade succeeds while the caller sees a failure.
 Other services needing a restart and any pending reboot are reported; action
 them with `vibebox restart`.
+
+### Scheduled maintenance
+
+Two pre-installed jobs run `update` for you; the user configures them in
+`vibebox.env`:
+
+| Setting | Default | Job |
+|---|---|---|
+| `MAINTENANCE_ENABLED` | `true` | turns both jobs on or off |
+| `MAINTENANCE_DAILY_AT` | `01:00` | `update tools` |
+| `MAINTENANCE_WEEKLY_AT` | `Sun 02:00` | `update all`, then journal trim (500 MB / 30 days) and a prune of Docker images and build cache unused for a week |
+
+Values are systemd calendar expressions in the guest's timezone; an empty
+value turns that job off; a run missed while the VM was off happens at the
+next start. The jobs never touch user applications, never remove containers
+or volumes, never reboot, and never restart services -- they report what needs
+a restart, as `update` does. Runs cannot overlap (a lock serializes them).
+
+```powershell
+.\vm\host\vibebox.ps1 maintenance apply        # push vibebox.env, (re)schedule
+.\vm\host\vibebox.ps1 maintenance status       # schedules, next and last run
+.\vm\host\vibebox.ps1 maintenance run daily    # run now, show the output
+```
+
+In the guest they are `vibebox-maintenance-{daily,weekly}.timer` driving
+`vibebox-maintenance@.service`; `journalctl -u 'vibebox-maintenance@*'` shows
+every run. The implementation is `vm/guest/maintenance.sh`. Ubuntu's
+unattended upgrades continue to apply security fixes daily on their own.
 
 `vibebox provision` re-runs all idempotent guest phases. `vibebox rebuild`
 creates a clean official Ubuntu guest and provisions it again. Restore user

@@ -25,7 +25,10 @@ manifest_lock="$ROOT/manifest.lock"
 before_lock=$(mktemp)
 before_pkgs=$(mktemp)
 trap 'rm -f "$before_lock" "$before_pkgs"' EXIT
-[[ -f "$manifest_lock" ]] && cp "$manifest_lock" "$before_lock" || true
+# Compare versions only: generated_at changes on every run and would make an
+# unchanged toolchain report as updated.
+lock_versions() { grep -v '^generated_at' "$1" 2>/dev/null || true; }
+[[ -f "$manifest_lock" ]] && lock_versions "$manifest_lock" > "$before_lock" || true
 dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | sort > "$before_pkgs" || true
 
 if [[ "$MODE" == "all" || "$MODE" == "os" ]]; then
@@ -68,9 +71,9 @@ if [[ "$MODE" == "all" || "$MODE" == "os" ]]; then
 fi
 
 if [[ "$MODE" == "all" || "$MODE" == "tools" ]]; then
-    if [[ -f "$manifest_lock" ]] && ! diff -q "$before_lock" "$manifest_lock" >/dev/null 2>&1; then
+    if [[ -f "$manifest_lock" ]] && ! diff -q "$before_lock" <(lock_versions "$manifest_lock") >/dev/null 2>&1; then
         printf 'tools:\n'
-        { diff "$before_lock" "$manifest_lock" 2>/dev/null || true; } | sed -n 's/^> /  now: /p; s/^< /  was: /p'
+        { diff "$before_lock" <(lock_versions "$manifest_lock") 2>/dev/null || true; } | sed -n 's/^> /  now: /p; s/^< /  was: /p'
     else
         printf 'tools: already current\n'
     fi

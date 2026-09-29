@@ -44,6 +44,7 @@ $lib = Join-Path $PSScriptRoot "lib"
 . (Join-Path $lib "backup.ps1")
 . (Join-Path $lib "migrate.ps1")
 . (Join-Path $lib "schedule.ps1")
+. (Join-Path $lib "maintenance.ps1")
 . (Join-Path $lib "tailnet.ps1")
 
 $ExitUsage = 1
@@ -68,6 +69,7 @@ vibebox memory <show|apply>
 vibebox rebuild [-Name] -Confirm
 vibebox backup [-Name] [-Label <label>]
 vibebox schedule <enable|disable|status> [-At HH:mm]
+vibebox maintenance <status|apply|run daily|run weekly>   (settings: MAINTENANCE_* in vibebox.env)
 vibebox restore [-Name] -Archive <path> [-SourceUser <user>] [-DryRun]
 vibebox migrate [-Name] -Archive <path> -SourceUser <user> [-IncludeCaches] [-DryRun]
 vibebox conformance [-Name] [-Json]
@@ -313,6 +315,23 @@ try {
                 "disable" { Disable-VibeboxBackupSchedule; exit 0 }
                 "status"  { Show-VibeboxBackupSchedule -Config $config; exit 0 }
                 default { throw "Unknown schedule operation '$Subcommand'. Use enable, disable, or status." }
+            }
+        }
+        "maintenance" {
+            $config = Get-VibeboxConfig -CreateIfMissing
+            $target = Resolve-VibeboxExistingName -Config $config
+            Assert-VibeboxManagedTarget -Name $target
+            if ([string]::IsNullOrWhiteSpace($Subcommand)) { $Subcommand = "status" }
+            switch ($Subcommand.ToLowerInvariant()) {
+                "status" { Show-VibeboxMaintenance -Name $target; exit 0 }
+                "apply"  { Set-VibeboxMaintenance -Config $config -Name $target; exit 0 }
+                "run" {
+                    $job = if ($RemainingArguments.Count -ge 1) { $RemainingArguments[0].ToLowerInvariant() } else { "" }
+                    if ($job -notin @("daily", "weekly")) { throw "maintenance run requires daily or weekly." }
+                    Start-VibeboxMaintenance -Name $target -Job $job
+                    exit 0
+                }
+                default { throw "Unknown maintenance operation '$Subcommand'. Use status, apply, or run daily|weekly." }
             }
         }
         "migrate" {

@@ -1,8 +1,50 @@
 # Vibebox VM edition
 
-The VM edition is a clean Ubuntu 24.04 guest managed from Windows through
-`host/vibebox.ps1`. It uses Multipass with Hyper-V, cloud-init for the
-non-secret first boot, and native Ubuntu systemd services.
+Vibebox gives you a personal Linux server on your Windows machine: a clean
+Ubuntu 24.04 VM that behaves like a VPS. You work *inside* it -- your code,
+agents, containers, and services -- and vibebox looks after the machine
+underneath. It is managed from Windows with `host/vibebox.ps1`, using
+Multipass on Hyper-V, cloud-init for the non-secret first boot, and native
+Ubuntu systemd services.
+
+## What vibebox does
+
+- **Creates and runs the VM** -- `create`, `start`, `stop`, `rebuild`, with
+  sizing and guest settings in one file, `vm/vibebox.env`.
+- **Provisions the platform** -- OS packages, Docker, Tailscale, the shared
+  developer CLIs, and a set of pre-installed applications (below).
+- **Keeps the platform current** -- scheduled
+  [maintenance](#maintenance) updates the toolchain daily and the OS weekly,
+  plus `vibebox update` on demand.
+- **Backs up your home** -- a nightly pull to a folder on the Windows host,
+  with `restore` into a new or rebuilt VM.
+- **Connects it** -- SSH from Windows, and a Tailscale node with HTTPS names
+  for the services you run.
+- **Reports honestly** -- `vibebox status` checks VM, SSH, Tailscale, Docker,
+  disk, clock and services individually.
+
+**The durable principle: pre-installed by vibebox, owned and configured by
+you.** Vibebox maintains the platform; the applications it pre-installs for
+you are yours from the first boot -- you configure, update and fix them with
+their own tools, without ever changing vibebox. See
+[What vibebox owns, and what you own](#what-vibebox-owns-and-what-you-own).
+
+## What's pre-installed
+
+| Layer | What | Kept current by |
+|---|---|---|
+| OS | Ubuntu 24.04, zsh, git, build-essential, Python 3, Go, ripgrep, fzf, tmux, htop/btop, ffmpeg, jq, rsync, OpenSSH | vibebox: weekly maintenance, `vibebox update`; Ubuntu's own daily security updates |
+| Containers | Docker Engine with Compose and Buildx; your user is in the `docker` group | vibebox |
+| Network | Tailscale (join with `vibebox enroll tailscale`) | vibebox |
+| Developer CLIs | Node.js (`NODE_MAJOR`), `claude`, `codex`, `bun`, `gh`, and language servers (pyright, TypeScript, YAML, Bash, Tailwind, VS Code HTML/CSS/JSON) | vibebox: daily maintenance, `vibebox update` |
+| Optional CLIs | Whatever `TOOLS_OPTIONAL` lists from: `agy`, `herdr`, `rtk`, `droid`, `codeburn`, `pi`, `codegraph`, `gws`, `docling`, `infisical` | vibebox: daily maintenance, `vibebox update` |
+| Your applications | `hermes` (Hermes Agent) and `hermes-webui` (Hermes WebUI, running as your user service), when listed in `TOOLS_OPTIONAL` | **you** -- installed once into your home, then yours |
+| Platform services | Maintenance jobs, backup producer, disk auto-grow, tailnet reconcile | vibebox |
+
+Everything except your applications is platform: vibebox installs it system
+wide and keeps it current. Your applications live in your home and run as
+your own user services; see [Your applications](#what-vibebox-owns-and-what-you-own)
+for how to run, update and configure them.
 
 ## Prerequisites
 
@@ -20,9 +62,6 @@ The preflight command checks these prerequisites and creates the ignored
 ```powershell
 .\vm\host\vibebox.ps1 doctor
 ```
-
-The current environment has not passed this gate because Multipass is not
-installed. No VM is claimed to exist.
 
 Windows PowerShell 5.1 is not supported. Open PowerShell 7 (`pwsh`) and run
 the commands below. **No elevation is required.** Multipass drives Hyper-V
@@ -116,6 +155,8 @@ first if the VM holds real data you want to keep).
 
 Guest policy (`GUEST_UFW`, `GUEST_SWAP_GB`, `GUEST_TIMEZONE`, `NODE_MAJOR`,
 `TOOLS_*`) applies any time via `vibebox provision`, which is idempotent.
+Maintenance settings (`MAINTENANCE_*`) apply in seconds with
+`vibebox maintenance apply`; see [Maintenance](#maintenance).
 
 The VM disk is grow-only. `destroy` and `rebuild` require `-Confirm` and
 refuse unmanaged instances.
@@ -273,8 +314,10 @@ here shows as roughly 1.9 GiB. That is expected, not a misconfiguration.
 ## Updating
 
 `update` upgrades the operating system packages and the pre-installed toolchain.
-It runs from either side and both forms execute the same
-`/opt/vibebox/update.sh`, so they cannot drift.
+[Maintenance](#maintenance) runs it on a schedule; run it by hand whenever you
+want something newer now. It runs from either side and both forms execute the
+same `/opt/vibebox/update.sh` -- as do the maintenance jobs -- so they cannot
+drift.
 
 From inside the guest:
 
@@ -298,7 +341,7 @@ From the Windows host:
 | Mode | Does |
 |---|---|
 | `os` | `apt-get update`, `apt-get upgrade`, `autoremove`, `clean`. Not `full-upgrade` -- that can *remove* packages to resolve dependencies, which is not a decision an update should make unattended. |
-| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Never touches Hermes or anything else the user installed in their home (see [Your software](#your-software)). Records resolved versions in `manifest.lock`. |
+| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Never updates Hermes, the WebUI, or anything else in the user's home (see [What vibebox owns, and what you own](#what-vibebox-owns-and-what-you-own)). Records resolved versions in `manifest.lock`. |
 | `all` | Both, in that order. |
 
 `update` does **not** touch the OS contract: it never changes the Ubuntu
@@ -356,37 +399,112 @@ friendly errors on a box with no init, and shadowing a real CLI is what the
 design forbids.
 
 
-## Your software
+## Maintenance
 
-Vibebox is the machine, like a VPS: the OS, Docker, Tailscale, backups, and the
-shared CLIs. What you run on it -- Hermes, its gateway, the Hermes WebUI, a
-droid daemon, your own services -- is **your** software. It lives in your
-home, is installed and updated with its own upstream tooling, and runs under
-your systemd **user** manager. Vibebox never installs a second copy of it,
-never updates it, and ships no service wrappers for it, so there is only ever
-one copy and you can fix it yourself without changing vibebox.
+Maintenance is pre-installed and on by default. You control it from
+`vm/vibebox.env`:
+
+```ini
+MAINTENANCE_ENABLED=true         # false turns off both jobs
+MAINTENANCE_DAILY_AT=01:00       # toolchain update; empty turns it off
+MAINTENANCE_WEEKLY_AT=Sun 02:00  # OS + toolchain update, housekeeping; empty turns it off
+```
+
+Times are systemd calendar expressions in the guest's timezone
+(`GUEST_TIMEZONE`): `01:00` means every day, `Sun 02:00` every Sunday,
+`Mon..Fri 03:30` weekdays. A job missed while the VM was off runs at the next
+start. After editing, apply without re-provisioning:
+
+```powershell
+.\vm\host\vibebox.ps1 maintenance apply        # push settings, (re)schedule both jobs
+.\vm\host\vibebox.ps1 maintenance status       # schedules, next run, last result
+.\vm\host\vibebox.ps1 maintenance run daily    # run a job now and show its output
+.\vm\host\vibebox.ps1 maintenance run weekly
+```
+
+| Job | Default | Does |
+|---|---|---|
+| daily | 01:00 | `update tools`: the developer and optional CLIs |
+| weekly | Sunday 02:00 | `update all`: OS packages and the toolchain; then trims the journal (500 MB / 30 days) and removes Docker images and build cache unused for a week |
+
+What maintenance never does: touch your applications (Hermes, the WebUI,
+anything in your home), remove containers or volumes, reboot, or restart
+services. Like `vibebox update`, it reports services needing a restart and a
+pending reboot; act on those with `vibebox restart` when it suits you.
+Ubuntu's own unattended upgrades still apply security fixes daily.
+
+Inside the VM, the jobs are ordinary systemd units:
+
+```bash
+systemctl list-timers 'vibebox-maintenance-*'
+journalctl -u 'vibebox-maintenance@*' -e     # what the last runs did
+```
+
+The host backup is scheduled separately, on Windows, with
+`vibebox schedule` (see [`docs/operations.md`](docs/operations.md)).
+Maintenance of your own applications, such as `hermes update`, is yours; if
+you want it scheduled, add a timer to your own systemd user units.
+
+
+## What vibebox owns, and what you own
+
+**The principle: pre-installed by vibebox, owned and configured by you.**
+
+Vibebox should feel like a VPS. You spend your time on the software and
+configuration inside it, not on vibebox. When something you run misbehaves,
+you fix it in the VM with that software's own tools, never by changing
+vibebox or waiting for a fix to it. Every decision about what vibebox does
+follows from that.
+
+| | Examples | Installed by | Updated, configured, restarted by |
+|---|---|---|---|
+| **Platform** | OS, Docker, Tailscale, backups, shared CLIs (`claude`, `codex`, `gh`, ...), linger | vibebox (`provision`) | vibebox (`vibebox update`, `vibebox.env`) |
+| **User applications** | Hermes and its gateway, Hermes WebUI | vibebox, **once** (`TOOLS_OPTIONAL`) | **you**, with their own tooling |
+| **Your own software** | anything else you install or run | you | you |
+
+A pre-installed user application:
+
+- is installed into **your home** by its upstream installer, running **as
+  you**, never as root, and runs as your systemd **user** service;
+- is installed **once**: provisioning skips it whenever it is already present,
+  so a re-provision or rebuild never overwrites your setup;
+- is then **yours**. Vibebox never updates, reconfigures, restarts, or
+  supervises it, ships no system unit or root copy of it, and puts no wrapper
+  between you and its own CLI.
+
+That keeps exactly one copy of each application, the one you maintain.
+Wrapping user software in vibebox is what previously produced three
+drifting copies of Hermes and boot-time failures users could not fix
+themselves. New pre-installed applications go in `guest/user-apps.sh` and
+follow the same rules.
 
 Your user services keep running after you log out and start at boot, because
 provisioning enables linger for the guest user.
 
-| Task | Command (as your user, inside the VM) |
+### Everyday commands
+
+As your user, inside the VM:
+
+| Task | Command |
 |---|---|
-| Install Hermes | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` (also registers the gateway as a user service) |
+| First-time Hermes setup | `hermes setup` (or `vibebox enroll hermes` from Windows) |
+| Run the messaging gateway | `hermes gateway setup`, then `hermes gateway install` (registers it as your user service) |
 | Update Hermes | `hermes update` (restarts the gateway itself) |
 | Restart / status of the gateway | `hermes gateway restart` / `hermes gateway status` |
-| Restart the WebUI | `systemctl --user restart hermes-webui` |
+| Configure Hermes | `hermes config`, `~/.hermes/config.yaml` |
+| Update the WebUI | `git -C ~/.local/share/hermes-webui pull`, then restart it |
+| Restart the WebUI | `systemctl --user restart hermes-webui` (also after a Hermes update) |
+| Configure the WebUI | `~/.local/share/hermes-webui/.env` (host, port, password, ...), then restart it |
 | Logs of any user service | `journalctl --user -u <name> -f` |
 | List your services | `systemctl --user list-units --type=service` |
 
-For the WebUI, follow upstream's
+The WebUI listens on `127.0.0.1:8787` by default and finds the agent in
+`~/.hermes/hermes-agent`. Its unit, `~/.config/systemd/user/hermes-webui.service`,
+follows upstream's
 [supervisor guide](https://github.com/nesquena/hermes-webui/blob/master/docs/supervisor.md)
-(`~/.config/systemd/user/hermes-webui.service` running `start.sh --foreground`)
-and update it with `git pull` in its checkout. After a Hermes update that
-changes the agent's packaging, restart the WebUI so it picks up the new agent.
-
-`hermes` in `TOOLS_OPTIONAL` only runs the upstream installer, as your user,
-on a box where Hermes is not installed yet. It never touches an existing
-install.
+and is yours to edit. To skip a pre-installed application, leave it out of
+`TOOLS_OPTIONAL`; to remove one, use its own uninstall (`hermes uninstall`, or
+disable the unit and delete the checkout).
 
 
 ## Tailnet URLs
@@ -459,7 +577,7 @@ explicitly approved the Gate A report.
 
 ## Project state, for picking this up later
 
-Last substantive session: 2026-09-13.
+Last substantive session: 2026-09-29.
 
 **Where it stands.** The VM is real and holds live data. `vibebox` runs Ubuntu
 24.04 on Hyper-V via Multipass, guest user `herwin` (uid 1000, zsh), 4 vCPU /
@@ -481,8 +599,18 @@ symlinks retargeted from `/home/dev`. Conformance runs 16 pass / 1 fail /
   both backup and migrate. It took the home from 40.3 GB to 4.03 GB.
 - The rescue console (A2) is unproven by explicit decision; the argument rests
   on backups and git, which makes the backup schedule load-bearing.
-- Hermes and its WebUI are user software, not part of the image, and the
-  tailnet registry ships empty so nothing advertises a dead port.
+- **Pre-installed by vibebox, owned and configured by the user** is the
+  durable principle (2026-09-29). Vibebox maintains the platform; Hermes and
+  the Hermes WebUI are installed once into the user's home by
+  `guest/user-apps.sh` and never updated, supervised or wrapped by vibebox.
+  An earlier design with root copies and system units produced three drifting
+  Hermes installs; see "What vibebox owns, and what you own".
+- Maintenance is two pre-installed, user-configured jobs (`MAINTENANCE_*`):
+  daily toolchain, weekly OS + toolchain + housekeeping. They never prune
+  Docker containers or volumes and never reboot.
+- Linger is enabled for the guest user at user creation, so user services run
+  without a login session.
+- The tailnet registry ships empty so nothing advertises a dead port.
 
 **Tailnet.** Enrolled as `vibebox.goose-marlin.ts.net` (100.113.103.44),
 untagged. Because it is untagged the node key **expires 2027-03-12**, after
@@ -499,6 +627,10 @@ for that tag -- tagged nodes do not expire.
   that. Neither has been run through a real reboot yet, and sleep/resume and a
   multi-day soak are still untested. Post-resume clock skew and Tailscale
   reconnect are the other open failure modes.
+- Scheduled backups were flagged failed from 2026-09-14 to 09-29 (tar exit 1
+  on files changing mid-read), so retention never ran; fixed in #19. The
+  first clean scheduled run is 2026-09-30 -- confirm it wrote a `.json`
+  sidecar.
 - Backup and restore have not been exercised end to end against this data.
   `restore` gained cross-account rename support that the migration used, but
   the full backup → rebuild → restore loop is unproven.

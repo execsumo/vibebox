@@ -1,0 +1,18 @@
+[Unit]
+Description=Vibebox %i maintenance
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/vibebox/maintenance.sh run %i
+# Match an interactive `sudo update`. A system service has no HOME, and vendor
+# installers (droid, agy) then write to /.local/bin or abort, so scheduled runs
+# silently stop updating them.
+Environment=HOME=/root
+# Stay out of the way of interactive work.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h
+StandardOutput=journal
+StandardError=journal

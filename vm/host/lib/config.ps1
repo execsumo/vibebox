@@ -17,6 +17,9 @@ $script:VibeboxConfigKeys = @(
     "NODE_MAJOR",
     "TOOLS_OPTIONAL",
     "TOOLS_UPDATE_POLICY",
+    "MAINTENANCE_ENABLED",
+    "MAINTENANCE_DAILY_AT",
+    "MAINTENANCE_WEEKLY_AT",
     "BACKUP_DEST",
     "BACKUP_RETENTION_DAYS",
     "READINESS_TIMEOUT_SEC"
@@ -183,6 +186,14 @@ function Assert-VibeboxConfig {
     if ($v.TOOLS_UPDATE_POLICY -notin @("latest", "locked")) {
         throw "TOOLS_UPDATE_POLICY must be latest or locked."
     }
+    $null = ConvertTo-VibeboxBoolean -Value $v.MAINTENANCE_ENABLED -Name "MAINTENANCE_ENABLED"
+    # The guest validates the full systemd calendar grammar; this only keeps
+    # the value to the characters that grammar uses. Empty turns a job off.
+    foreach ($key in @("MAINTENANCE_DAILY_AT", "MAINTENANCE_WEEKLY_AT")) {
+        if ($v[$key] -notmatch '^[A-Za-z0-9 :*/,.~+-]*$') {
+            throw "$key must be a systemd calendar expression such as 01:00 or 'Sun 02:00', or empty to turn it off."
+        }
+    }
     $retention = 0
     if (-not [int]::TryParse($v.BACKUP_RETENTION_DAYS, [ref]$retention) -or $retention -lt 0) {
         throw "BACKUP_RETENTION_DAYS must be a non-negative integer."
@@ -192,7 +203,7 @@ function Assert-VibeboxConfig {
         throw "READINESS_TIMEOUT_SEC must be a positive integer."
     }
 
-    $allowedOptional = @("agy", "herdr", "rtk", "droid", "hermes", "codeburn", "pi", "codegraph", "gws", "docling", "infisical")
+    $allowedOptional = @("agy", "herdr", "rtk", "droid", "hermes", "hermes-webui", "codeburn", "pi", "codegraph", "gws", "docling", "infisical")
     foreach ($tool in (ConvertTo-VibeboxList $v.TOOLS_OPTIONAL)) {
         if ($tool -notin $allowedOptional) {
             throw "TOOLS_OPTIONAL contains unsupported tool '$tool'."
