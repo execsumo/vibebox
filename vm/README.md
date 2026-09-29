@@ -298,7 +298,7 @@ From the Windows host:
 | Mode | Does |
 |---|---|
 | `os` | `apt-get update`, `apt-get upgrade`, `autoremove`, `clean`. Not `full-upgrade` -- that can *remove* packages to resolve dependencies, which is not a decision an update should make unattended. |
-| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Existing Hermes installs use `hermes update`; managed Hermes gateway and WebUI services are restarted afterward. Records resolved versions in `manifest.lock`. |
+| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Never touches Hermes or anything else the user installed in their home (see [Your software](#your-software)). Records resolved versions in `manifest.lock`. |
 | `all` | Both, in that order. |
 
 `update` does **not** touch the OS contract: it never changes the Ubuntu
@@ -308,9 +308,7 @@ release, the guest user, or anything set at create time. Those need
 ### Version policy
 
 With `TOOLS_UPDATE_POLICY=latest` (the default) each tool is updated to its
-newest version. Existing Hermes installs use `hermes update` rather than the
-bootstrap installer; the installer is used only when Hermes is missing. npm
-globals are reinstalled at `@latest` rather than `npm update -g`, because for
+newest version. npm globals are reinstalled at `@latest` rather than `npm update -g`, because for
 globals npm stays inside the semver range the package was installed under and
 never crosses a major -- and these CLIs move majors.
 
@@ -327,9 +325,9 @@ packages upgraded:
   libc6: 2.39-0ubuntu8.8 -> 2.39-0ubuntu8.9
   perl:  5.38.2-3.2ubuntu0.3 -> 5.38.2-3.2ubuntu0.4
 tools:
-  was: hermes = "Hermes Agent v0.21.2 · upstream bdb14f5f"
-  now: hermes = "Hermes Agent v0.21.2 · upstream a8843ab9"
-services needing restart: vibebox-hermes-gateway@herwin.service
+  was: claude = "2.1.3 (Claude Code)"
+  now: claude = "2.1.4 (Claude Code)"
+services needing restart: ssh.service
 run: vibebox restart
 reboot required: linux-image-generic
 ```
@@ -338,9 +336,7 @@ reboot required: linux-image-generic
 
 APT services are not restarted automatically. `needrestart` runs in
 **list-only** mode during the upgrade because restarting `dbus` or `sshd`
-mid-command kills the channel the command arrived on. After `hermes update`,
-the managed Hermes gateway and WebUI services are restarted so they load the
-new code; the WebUI's Tailscale Service continues to target port 8787.
+mid-command kills the channel the command arrived on.
 
 Other services needing a restart, and any pending reboot, are reported for you
 to action with `vibebox restart`. A kernel or libc upgrade sets `reboot
@@ -358,6 +354,39 @@ Guest commands live in `vm/guest/bin/` and provisioning installs them to
 `tailscale` are deliberately **not** carried over -- they existed to print
 friendly errors on a box with no init, and shadowing a real CLI is what the
 design forbids.
+
+
+## Your software
+
+Vibebox is the machine, like a VPS: the OS, Docker, Tailscale, backups, and the
+shared CLIs. What you run on it -- Hermes, its gateway, the Hermes WebUI, a
+droid daemon, your own services -- is **your** software. It lives in your
+home, is installed and updated with its own upstream tooling, and runs under
+your systemd **user** manager. Vibebox never installs a second copy of it,
+never updates it, and ships no service wrappers for it, so there is only ever
+one copy and you can fix it yourself without changing vibebox.
+
+Your user services keep running after you log out and start at boot, because
+provisioning enables linger for the guest user.
+
+| Task | Command (as your user, inside the VM) |
+|---|---|
+| Install Hermes | `curl -fsSL https://hermes-agent.nousresearch.com/install.sh \| bash` (also registers the gateway as a user service) |
+| Update Hermes | `hermes update` (restarts the gateway itself) |
+| Restart / status of the gateway | `hermes gateway restart` / `hermes gateway status` |
+| Restart the WebUI | `systemctl --user restart hermes-webui` |
+| Logs of any user service | `journalctl --user -u <name> -f` |
+| List your services | `systemctl --user list-units --type=service` |
+
+For the WebUI, follow upstream's
+[supervisor guide](https://github.com/nesquena/hermes-webui/blob/master/docs/supervisor.md)
+(`~/.config/systemd/user/hermes-webui.service` running `start.sh --foreground`)
+and update it with `git pull` in its checkout. After a Hermes update that
+changes the agent's packaging, restart the WebUI so it picks up the new agent.
+
+`hermes` in `TOOLS_OPTIONAL` only runs the upstream installer, as your user,
+on a box where Hermes is not installed yet. It never touches an existing
+install.
 
 
 ## Tailnet URLs
@@ -452,8 +481,8 @@ symlinks retargeted from `/home/dev`. Conformance runs 16 pass / 1 fail /
   both backup and migrate. It took the home from 40.3 GB to 4.03 GB.
 - The rescue console (A2) is unproven by explicit decision; the argument rests
   on backups and git, which makes the backup schedule load-bearing.
-- Hermes WebUI is not installed, and the tailnet registry ships empty so
-  nothing advertises a dead port.
+- Hermes and its WebUI are user software, not part of the image, and the
+  tailnet registry ships empty so nothing advertises a dead port.
 
 **Tailnet.** Enrolled as `vibebox.goose-marlin.ts.net` (100.113.103.44),
 untagged. Because it is untagged the node key **expires 2027-03-12**, after

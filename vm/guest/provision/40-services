@@ -30,23 +30,27 @@ systemctl enable --now vibebox-grow-disk.service
 systemctl enable --now vibebox-tailnet.service
 systemctl restart vibebox-tailnet.service
 
-if command -v hermes >/dev/null 2>&1; then
-    systemctl enable --now "vibebox-hermes-gateway@$GUEST_USER.service"
-else
-    printf 'optional service skipped: hermes is not installed\n' >&2
-fi
-
-if command -v droid >/dev/null 2>&1; then
-    systemctl enable --now "vibebox-droid-daemon@$GUEST_USER.service"
-else
-    printf 'optional service skipped: droid is not installed\n' >&2
-fi
-
-if [[ -x /opt/hermes-webui/ctl.sh ]]; then
-    systemctl enable --now "vibebox-hermes-webui@$GUEST_USER.service"
-else
-    printf 'optional service skipped: Hermes WebUI is not installed\n' >&2
-fi
+# Vibebox supervises only the platform. Applications the user runs -- Hermes,
+# its gateway, the WebUI, a droid daemon -- are the user's software: installed
+# into their home and supervised by their own systemd *user* units, the way the
+# upstream installers set them up. Earlier releases shipped root-level wrappers
+# for these; they ran a second copy of the code, drifted from the one the user
+# updated, and failed whenever the user's setup differed. Retire them.
+for retired in vibebox-hermes-gateway@ vibebox-hermes-webui@ vibebox-droid-daemon@; do
+    systemctl disable --now "${retired}${GUEST_USER}.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${retired}.service"
+done
+# Root-level Hermes launchers (hermes, hermes-acp, hermes-agent) pointed into a
+# root-owned copy -- /root/.hermes or the container-era /usr/local/lib -- that
+# the user could not run or that silently ran stale code ahead of their own
+# ~/.local/bin on some PATHs. Remove only launchers into those copies.
+for launcher in /usr/local/bin/hermes /usr/local/bin/hermes-*; do
+    [[ -f "$launcher" ]] || continue
+    if grep -qE '/root/|/usr/local/lib/hermes-agent' "$launcher" 2>/dev/null; then
+        rm -f "$launcher"
+    fi
+done
+systemctl daemon-reload
 
 # In-guest commands on PATH. The legacy container shipped these in
 # /usr/local/bin; the VM keeps the ones that still make sense. Deliberately
@@ -60,12 +64,6 @@ if [[ -d "$ROOT/bin" ]]; then
     done
     echo "guest commands installed: $(ls "$ROOT/bin" | xargs)"
 fi
-
-# The account's own systemd user units (Hermes WebUI, maintenance timers, ...)
-# only run while it has a login session unless it lingers. Without this they
-# stop at the last logout and stay down after every reboot until someone SSHes
-# in. The conformance suite used to enable it as a side effect, which hid this.
-loginctl enable-linger "$GUEST_USER"
 
 # Clear stale failure counters before touching units. A unit that hit its
 # start limit refuses `systemctl start` until it is reset, so without this a

@@ -161,8 +161,9 @@ function Invoke-VibeboxEnroll {
         "hermes" {
             Write-Host "Hermes enrollment runs interactively inside the guest; no credential is captured by the host."
             $multipass = (Get-VibeboxMultipassCommand).Source
-            & $multipass "exec" $Name "--" "sudo" "-u" $User "-H" "hermes" "login"
-            if ($LASTEXITCODE -ne 0) { throw "Hermes enrollment failed." }
+            # Hermes is a per-user install, not on sudo's secure_path.
+            & $multipass "exec" $Name "--" "sudo" "-u" $User "-H" "/home/$User/.local/bin/hermes" "login"
+            if ($LASTEXITCODE -ne 0) { throw "Hermes enrollment failed. If Hermes is not installed yet, install it as $User with the upstream installer." }
         }
     }
 }

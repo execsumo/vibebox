@@ -83,34 +83,41 @@ enabled_optional() {
     return 1
 }
 
-restart_hermes_services() {
-    local unit
-    for unit in \
-        "vibebox-hermes-gateway@$GUEST_USER.service" \
-        "vibebox-hermes-webui@$GUEST_USER.service"; do
-        if systemctl is-enabled --quiet "$unit" || systemctl is-active --quiet "$unit"; then
-            printf 'restarting %s\n' "$unit"
-            systemctl restart "$unit"
-        fi
+guest_home="/home/$GUEST_USER"
+hermes_launcher="$guest_home/.local/bin/hermes"
+
+# Run a command as the guest user with a working user manager, so installers
+# that register systemd user services (Hermes' gateway) can reach it.
+as_guest_user() {
+    local uid
+    uid=$(id -u "$GUEST_USER")
+    for _ in $(seq 1 20); do
+        [[ -S "/run/user/$uid/bus" ]] && break
+        sleep 0.5
     done
+    runuser -u "$GUEST_USER" -- env \
+        HOME="$guest_home" USER="$GUEST_USER" LOGNAME="$GUEST_USER" \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        PATH="$guest_home/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        "$@"
 }
 
-update_hermes() {
-    if command -v hermes >/dev/null 2>&1; then
-        # The installer also updates an existing checkout, but `hermes update`
-        # avoids repeating its bootstrap work and preserves the managed install.
-        if hermes update --yes; then
-            restart_hermes_services
-        else
-            printf 'optional: Hermes update failed; leaving the current install in place\n' >&2
-        fi
+# Hermes is the user's software, not vibebox's. It lives in their home, where
+# upstream's installer puts it, and they update it with `hermes update` and
+# restart it with `hermes gateway restart` -- the same as on any VPS. Vibebox
+# only offers a one-time install on a box that does not have it yet, and never
+# touches an existing install: updating or supervising it from here ran a
+# second, root-owned copy that drifted from the one the user maintained.
+install_hermes_if_missing() {
+    if [[ -x "$hermes_launcher" ]]; then
+        printf 'hermes: user install present; update it with `hermes update`\n'
         return 0
     fi
-
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || true
-    if [[ -x /root/.local/bin/hermes ]]; then
-        install -m 0755 /root/.local/bin/hermes /usr/local/bin/hermes
-    fi
+    printf 'hermes: installing for %s with the upstream installer\n' "$GUEST_USER"
+    as_guest_user bash -c \
+        'curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive' ||
+        printf 'optional: Hermes install failed; install it as %s with the upstream installer\n' "$GUEST_USER" >&2
 }
 
 install -d -m 0755 /etc/apt/keyrings
@@ -174,7 +181,7 @@ else
     if enabled_optional agy && [[ -x /root/.local/bin/agy ]]; then
         install -m 0755 /root/.local/bin/agy /usr/local/bin/agy
     fi
-    enabled_optional hermes && update_hermes
+    enabled_optional hermes && install_hermes_if_missing
 
     # Infisical is the secret store for this box, so it is installed from its
     # own apt repository rather than depending on a binary that happened to be
@@ -192,7 +199,16 @@ fi
 version_for() {
     case "$1" in
         go) go version ;;
+        # Per-user install: report the version the user actually runs.
+        hermes) as_guest_user "$hermes_launcher" --version 2>/dev/null ;;
         *) "$1" --version ;;
+    esac
+}
+
+tool_present() {
+    case "$1" in
+        hermes) [[ -x "$hermes_launcher" ]] ;;
+        *) command -v "$1" >/dev/null 2>&1 ;;
     esac
 }
 
@@ -209,7 +225,7 @@ fi
 
 missing_optional=()
 for tool in "${optional_tools[@]}"; do
-    if ! command -v "$tool" >/dev/null 2>&1 ||
+    if ! tool_present "$tool" ||
         ! version_for "$tool" >/dev/null 2>&1; then
         missing_optional+=("$tool")
     fi
@@ -220,7 +236,7 @@ done
     printf 'generated_at = "%s"\n' "$(date --iso-8601=seconds)"
     printf 'node_major = "%s"\n' "$(node --version)"
     for tool in "${required_tools[@]}" "${optional_tools[@]}"; do
-        if command -v "$tool" >/dev/null 2>&1; then
+        if tool_present "$tool"; then
             version_for "$tool" 2>/dev/null | head -n 1 | sed 's/"/\\"/g' |
                 while IFS= read -r version; do
                     printf '%s = "%s"\n' "$tool" "$version"
