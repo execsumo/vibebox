@@ -119,10 +119,14 @@ function Invoke-VibeboxBackup {
         } finally {
             $stream.Dispose()
         }
-        $null = $process.StandardError.ReadToEnd()
+        $stderr = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
         if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $archive -PathType Leaf)) {
-            throw "The restricted backup stream failed."
+            # Name the cause. Discarding tar's stderr hid two weeks of failed
+            # scheduled runs behind a bare exit code.
+            $detail = (@($stderr -split "`r?`n" | Where-Object { $_ -and $_ -notmatch "socket ignored|Removing leading" }) |
+                Select-Object -Last 5) -join "; "
+            throw "The restricted backup stream failed (exit $($process.ExitCode)): $detail"
         }
         $metadata = [ordered]@{
             name = $Name

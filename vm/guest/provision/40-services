@@ -61,6 +61,12 @@ if [[ -d "$ROOT/bin" ]]; then
     echo "guest commands installed: $(ls "$ROOT/bin" | xargs)"
 fi
 
+# The account's own systemd user units (Hermes WebUI, maintenance timers, ...)
+# only run while it has a login session unless it lingers. Without this they
+# stop at the last logout and stay down after every reboot until someone SSHes
+# in. The conformance suite used to enable it as a side effect, which hid this.
+loginctl enable-linger "$GUEST_USER"
+
 # Clear stale failure counters before touching units. A unit that hit its
 # start limit refuses `systemctl start` until it is reset, so without this a
 # re-provision that fixes the underlying problem still looks broken.
