@@ -5,10 +5,10 @@ The host entry point is `vm/host/vibebox.ps1`. Run it from **PowerShell 7
 guest remains usable with ordinary Ubuntu commands: `systemctl`, `journalctl`,
 `apt`, `ss`, and the native Docker CLI.
 
-Vibebox operates the platform; the applications it pre-installs (Hermes, the
-Hermes WebUI) are owned and configured by the guest user and never updated or
-supervised by these commands. See "What vibebox owns, and what you own" in the
-README.
+Vibebox operates the platform. Hermes and the WebUI remain configured and
+run by the guest user, but when listed in `TOOLS_OPTIONAL` they are updated
+with their upstream tools during tool updates. See "What vibebox owns, and
+what you own" in the README.
 
 No lifecycle command requires an elevated shell. Multipass drives Hyper-V
 through its own LocalSystem daemon, and Vibebox proves instance ownership from
@@ -98,11 +98,11 @@ update os         # apt only
 It uses `apt-get upgrade`, never `full-upgrade`: full-upgrade may remove
 packages to satisfy dependencies, which an unattended update should not
 decide. The toolchain half re-runs `provision/30-tools`, so `update` and
-`provision` cannot disagree about how a tool is installed. It never updates
-Hermes, the WebUI, or other software in the user's home: those are
-pre-installed once and then owned by the user, who updates them with their own
-tooling (`hermes update`). See "What vibebox owns, and what you own" in the
-README. `TOOLS_UPDATE_POLICY=locked` pins tools to `manifest.lock`.
+`provision` cannot disagree about how a tool is installed. Optional tools in
+`TOOLS_OPTIONAL` are installed if missing and updated when present. Hermes and
+the WebUI use their upstream update methods; `TOOLS_UPDATE_POLICY=locked`
+leaves existing user apps unchanged while still installing missing ones. See
+"What vibebox owns, and what you own" in the README.
 
 It does not silently change the OS contract -- release, guest user and other
 create-time settings need `vibebox rebuild`.
@@ -126,9 +126,11 @@ Two pre-installed jobs run `update` for you; the user configures them in
 
 Values are systemd calendar expressions in the guest's timezone; an empty
 value turns that job off; a run missed while the VM was off happens at the
-next start. The jobs never touch user applications, never remove containers
-or volumes, never reboot, and never restart services -- they report what needs
-a restart, as `update` does. Runs cannot overlap (a lock serializes them).
+next start. The jobs update user applications only when listed in
+`TOOLS_OPTIONAL`; they never remove containers or volumes or reboot. The WebUI
+is restarted only when its checkout changes and its user service was active;
+OS services needing a restart are reported, not restarted. Runs cannot overlap
+(a lock serializes them).
 
 ```powershell
 .\vm\host\vibebox.ps1 maintenance apply        # push vibebox.env, (re)schedule

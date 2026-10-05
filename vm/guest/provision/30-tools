@@ -83,11 +83,8 @@ enabled_optional() {
     return 1
 }
 
-# User applications: pre-installed by vibebox, owned and configured by the
-# user. They live in the user's home and run as the user's own services;
-# guest/user-apps.sh installs each one once, when it is missing, and vibebox
-# never updates or supervises it afterwards. Updating one from here used to run
-# a second, root-owned copy that drifted from the one the user maintained.
+# User applications live in the user's home and run as their own services.
+# Sync through each app's upstream updater; never install a root-owned copy.
 # Order matters: the WebUI needs Hermes.
 user_apps=(hermes hermes-webui)
 user_apps_helper="$ROOT/user-apps.sh"
@@ -152,8 +149,6 @@ else
     # and are reported in the lock file rather than turning the base VM into a
     # partially provisioned state.
     enabled_optional herdr && curl -fsSL https://herdr.dev/install.sh | HERDR_INSTALL_DIR=/usr/local/bin sh || true
-    enabled_optional rtk && curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/master/install.sh |
-        RTK_INSTALL_DIR=/usr/local/bin sh || true
     enabled_optional droid && curl -fsSL https://app.factory.ai/cli | sh || true
     if enabled_optional droid && [[ -x /root/.local/bin/droid ]]; then
         install -m 0755 /root/.local/bin/droid /usr/local/bin/droid
@@ -167,21 +162,40 @@ else
     # own apt repository rather than depending on a binary that happened to be
     # migrated. A rebuild without a restore must still be able to reach
     # secrets, otherwise the box cannot bootstrap itself.
-    if enabled_optional infisical && ! command -v infisical >/dev/null 2>&1; then
-        curl -1sLf https://artifacts-cli.infisical.com/setup.deb.sh | bash             && apt-get update -qq             && apt-get install -y --no-install-recommends infisical             || printf 'optional: Infisical CLI install failed
-' >&2
+    if enabled_optional infisical; then
+        infisical_ready=true
+        if ! command -v infisical >/dev/null 2>&1; then
+            curl -1sLf https://artifacts-cli.infisical.com/setup.deb.sh | bash && apt-get update -qq || infisical_ready=false
+        fi
+        if [[ "$infisical_ready" == true ]]; then
+            apt-get install -y --no-install-recommends infisical ||
+                printf 'optional: Infisical CLI install/update failed\n' >&2
+        else
+            printf 'optional: Infisical CLI repository setup failed\n' >&2
+        fi
     fi
 
     enabled_optional docling && python3 -m pip install --break-system-packages --no-cache-dir \
         --extra-index-url https://download.pytorch.org/whl/cpu docling pdftotext || true
 fi
 
-# Outside the policy branch: a one-time install is not an update, so neither
-# policy governs it, and a locked box still gets the apps it was configured with.
+# Pi keeps extensions in the user's home, so update them as that user (not root).
+if enabled_optional pi && command -v pi >/dev/null 2>&1; then
+    pi_home=$(getent passwd "$GUEST_USER" | cut -d: -f6)
+    setpriv --reuid="$GUEST_USER" --regid="$GUEST_USER" --init-groups -- env \
+        HOME="$pi_home" USER="$GUEST_USER" LOGNAME="$GUEST_USER" \
+        PATH="$pi_home/.local/bin:/usr/local/bin:/usr/bin:/bin" \
+        pi update --extensions || printf 'optional: Pi extension update failed\n' >&2
+fi
+
+# Apps listed in TOOLS_OPTIONAL are kept current under latest policy. Locked
+# mode still installs missing apps but leaves existing user apps untouched.
+user_apps_action=sync
+[[ "${TOOLS_UPDATE_POLICY}" == locked ]] && user_apps_action=install
 for app in "${user_apps[@]}"; do
     enabled_optional "$app" || continue
-    "$user_apps_helper" install "$GUEST_USER" "$app" ||
-        printf 'optional: %s install failed; install it as %s with its upstream installer\n' "$app" "$GUEST_USER" >&2
+    "$user_apps_helper" "$user_apps_action" "$GUEST_USER" "$app" ||
+        printf 'optional: %s install/update failed for %s\n' "$app" "$GUEST_USER" >&2
 done
 
 version_for() {

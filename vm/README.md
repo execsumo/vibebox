@@ -23,10 +23,9 @@ Ubuntu systemd services.
 - **Reports honestly** -- `vibebox status` checks VM, SSH, Tailscale, Docker,
   disk, clock and services individually.
 
-**The durable principle: pre-installed by vibebox, owned and configured by
-you.** Vibebox maintains the platform; the applications it pre-installs for
-you are yours from the first boot -- you configure, update and fix them with
-their own tools, without ever changing vibebox. See
+**The durable principle: pre-installed by vibebox, configured by you.**
+Vibebox keeps optional applications current using their upstream updaters;
+their configuration and user services remain yours. See
 [What vibebox owns, and what you own](#what-vibebox-owns-and-what-you-own).
 
 ## What's pre-installed
@@ -37,14 +36,14 @@ their own tools, without ever changing vibebox. See
 | Containers | Docker Engine with Compose and Buildx; your user is in the `docker` group | vibebox |
 | Network | Tailscale (join with `vibebox enroll tailscale`) | vibebox |
 | Developer CLIs | Node.js (`NODE_MAJOR`), `claude`, `codex`, `bun`, `gh`, and language servers (pyright, TypeScript, YAML, Bash, Tailwind, VS Code HTML/CSS/JSON) | vibebox: daily maintenance, `vibebox update` |
-| Optional CLIs | Whatever `TOOLS_OPTIONAL` lists from: `agy`, `herdr`, `rtk`, `droid`, `codeburn`, `pi`, `codegraph`, `gws`, `docling`, `infisical` | vibebox: daily maintenance, `vibebox update` |
-| Your applications | `hermes` (Hermes Agent) and `hermes-webui` (Hermes WebUI, running as your user service), when listed in `TOOLS_OPTIONAL` | **you** -- installed once into your home, then yours |
+| Optional CLIs | Whatever `TOOLS_OPTIONAL` lists from: `agy`, `herdr`, `droid`, `codeburn`, `pi`, `codegraph`, `gws`, `docling`, `infisical` | vibebox: daily maintenance, `vibebox update` |
+| User applications | `hermes` (Hermes Agent) and `hermes-webui` (Hermes WebUI), when listed in `TOOLS_OPTIONAL` | vibebox installs and updates with upstream tools; you own configuration and user services |
 | Platform services | Maintenance jobs, backup producer, disk auto-grow, tailnet reconcile | vibebox |
 
-Everything except your applications is platform: vibebox installs it system
-wide and keeps it current. Your applications live in your home and run as
-your own user services; see [Your applications](#what-vibebox-owns-and-what-you-own)
-for how to run, update and configure them.
+Vibebox installs developer and optional tools system-wide. Hermes and the
+WebUI live in your home and run as your user services; when enabled in
+`TOOLS_OPTIONAL`, daily maintenance updates them using their upstream methods.
+See [Your applications](#what-vibebox-owns-and-what-you-own) for details.
 
 ## Prerequisites
 
@@ -341,7 +340,7 @@ From the Windows host:
 | Mode | Does |
 |---|---|
 | `os` | `apt-get update`, `apt-get upgrade`, `autoremove`, `clean`. Not `full-upgrade` -- that can *remove* packages to resolve dependencies, which is not a decision an update should make unattended. |
-| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses, so the two cannot disagree about how a tool is installed. Never updates Hermes, the WebUI, or anything else in the user's home (see [What vibebox owns, and what you own](#what-vibebox-owns-and-what-you-own)). Records resolved versions in `manifest.lock`. |
+| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses. Optional apps listed in `TOOLS_OPTIONAL` are installed if missing and updated when present (unless `TOOLS_UPDATE_POLICY=locked`); Hermes and the WebUI use their upstream update methods, and Pi refreshes the guest user's extensions with `pi update --extensions`. Records resolved versions in `manifest.lock`. |
 | `all` | Both, in that order. |
 
 `update` does **not** touch the OS contract: it never changes the Ubuntu
@@ -427,10 +426,11 @@ start. After editing, apply without re-provisioning:
 | daily | 01:00 | `update tools`: the developer and optional CLIs |
 | weekly | Sunday 02:00 | `update all`: OS packages and the toolchain; then trims the journal (500 MB / 30 days) and removes Docker images and build cache unused for a week |
 
-What maintenance never does: touch your applications (Hermes, the WebUI,
-anything in your home), remove containers or volumes, reboot, or restart
-services. Like `vibebox update`, it reports services needing a restart and a
-pending reboot; act on those with `vibebox restart` when it suits you.
+Maintenance updates Hermes and the WebUI only when listed in
+`TOOLS_OPTIONAL`; the WebUI is restarted only if its code changed and its user
+service was active. It does not change their configuration, remove containers
+or volumes, or reboot. It reports OS services needing a restart and pending
+reboots; act on those with `vibebox restart` when it suits you.
 Ubuntu's own unattended upgrades still apply security fixes daily.
 
 Inside the VM, the jobs are ordinary systemd units:
@@ -459,24 +459,22 @@ follows from that.
 | | Examples | Installed by | Updated, configured, restarted by |
 |---|---|---|---|
 | **Platform** | OS, Docker, Tailscale, backups, shared CLIs (`claude`, `codex`, `gh`, ...), linger | vibebox (`provision`) | vibebox (`vibebox update`, `vibebox.env`) |
-| **User applications** | Hermes and its gateway, Hermes WebUI | vibebox, **once** (`TOOLS_OPTIONAL`) | **you**, with their own tooling |
+| **User applications** | Hermes and its gateway, Hermes WebUI | vibebox, when listed in `TOOLS_OPTIONAL` | vibebox updates with upstream tools; **you** configure and manage services |
 | **Your own software** | anything else you install or run | you | you |
 
 A pre-installed user application:
 
 - is installed into **your home** by its upstream installer, running **as
   you**, never as root, and runs as your systemd **user** service;
-- is installed **once**: provisioning skips it whenever it is already present,
-  so a re-provision or rebuild never overwrites your setup;
-- is then **yours**. Vibebox never updates, reconfigures, restarts, or
-  supervises it, ships no system unit or root copy of it, and puts no wrapper
-  between you and its own CLI.
+- is installed if missing and updated when present if listed in
+  `TOOLS_OPTIONAL` (unless `TOOLS_UPDATE_POLICY=locked`); updates preserve
+  your configuration, and the WebUI service restarts only when its checkout
+  changes and the service is active;
+- remains yours to configure and manage. Vibebox ships no root copy or system
+  unit and puts no wrapper between you and its CLI.
 
-That keeps exactly one copy of each application, the one you maintain.
-Wrapping user software in vibebox is what previously produced three
-drifting copies of Hermes and boot-time failures users could not fix
-themselves. New pre-installed applications go in `guest/user-apps.sh` and
-follow the same rules.
+That keeps exactly one copy of each application. New pre-installed applications
+go in `guest/user-apps.sh` and use their upstream install/update methods.
 
 Your user services keep running after you log out and start at boot, because
 provisioning enables linger for the guest user.
@@ -600,10 +598,10 @@ symlinks retargeted from `/home/dev`. Conformance runs 16 pass / 1 fail /
 - The rescue console (A2) is unproven by explicit decision; the argument rests
   on backups and git, which makes the backup schedule load-bearing.
 - **Pre-installed by vibebox, owned and configured by the user** is the
-  durable principle (2026-09-29). Vibebox maintains the platform; Hermes and
-  the Hermes WebUI are installed once into the user's home by
-  `guest/user-apps.sh` and never updated, supervised or wrapped by vibebox.
-  An earlier design with root copies and system units produced three drifting
+  durable principle (2026-09-29). Hermes and the Hermes WebUI are installed
+  into the user's home and updated through their upstream tools when listed in
+  `TOOLS_OPTIONAL`; Vibebox does not supervise or wrap them. An earlier design
+  with root copies and system units produced three drifting
   Hermes installs; see "What vibebox owns, and what you own".
 - Maintenance is two pre-installed, user-configured jobs (`MAINTENANCE_*`):
   daily toolchain, weekly OS + toolchain + housekeeping. They never prune

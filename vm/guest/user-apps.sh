@@ -1,15 +1,9 @@
 #!/usr/bin/env bash
-# One-time installs of the user applications vibebox pre-installs.
-#
-# The principle (README, "What vibebox owns, and what you own"): pre-installed
-# by vibebox, owned and configured by the user. Each app lands in the user's
-# home through its upstream installer and runs under the user's own systemd
-# user manager. From then on it is theirs -- vibebox never updates,
-# reconfigures, restarts or wraps it. Every install here is a no-op when the
-# app is already present, so re-provisioning can never overwrite the user's
-# setup.
+# Install and update pre-installed user applications without taking ownership
+# of their configuration. Updates use each application's own upstream method.
 #
 # Usage: user-apps.sh install <user> <app>...
+#        user-apps.sh sync <user> <app>...
 #        user-apps.sh present <user> <app>
 #        user-apps.sh version <user> <app>
 # Apps:  hermes, hermes-webui
@@ -77,8 +71,7 @@ install_hermes() {
 # it in its .env, which the unit reads.
 install_hermes_webui() {
     if ! present hermes; then
-        printf 'hermes-webui: skipped; it needs Hermes, which is not installed\n' >&2
-        return 0
+        install_hermes || return
     fi
     printf 'hermes-webui: installing for %s from %s\n' "$user" "$WEBUI_REPO"
     as_user install -d "$(dirname "$webui_dir")" "$(dirname "$webui_unit")"
@@ -110,21 +103,47 @@ EOF
     as_user systemctl --user enable --now hermes-webui.service
 }
 
+update_app() {
+    case "$1" in
+        hermes)
+            printf 'hermes: updating for %s\n' "$user"
+            as_user "$home/.local/bin/hermes" update
+            ;;
+        hermes-webui)
+            before=$(as_user git -C "$webui_dir" rev-parse HEAD)
+            as_user git -C "$webui_dir" pull --ff-only --quiet
+            after=$(as_user git -C "$webui_dir" rev-parse HEAD)
+            if [[ "$before" != "$after" ]] && as_user systemctl --user is-active --quiet hermes-webui.service; then
+                as_user systemctl --user restart hermes-webui.service
+            fi
+            ;;
+        *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
+    esac
+}
+
+install_app() {
+    case "$1" in
+        hermes) install_hermes ;;
+        hermes-webui) install_hermes_webui ;;
+        *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
+    esac
+}
+
 case "$action" in
     present) present "${1:?app is required}" ;;
     version) version "${1:?app is required}" ;;
-    install)
+    install|sync)
         status=0
         for app in "$@"; do
             if present "$app"; then
-                printf '%s: already installed; it is yours to update and configure\n' "$app"
-                continue
+                if [[ "$action" == sync ]]; then
+                    update_app "$app" || status=1
+                else
+                    printf '%s: already installed; leaving it unchanged\n' "$app"
+                fi
+            else
+                install_app "$app" || status=1
             fi
-            case "$app" in
-                hermes) install_hermes || status=1 ;;
-                hermes-webui) install_hermes_webui || status=1 ;;
-                *) printf 'unknown user app: %s\n' "$app" >&2; status=1 ;;
-            esac
         done
         exit "$status"
         ;;

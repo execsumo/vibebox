@@ -203,7 +203,7 @@ function Assert-VibeboxConfig {
         throw "READINESS_TIMEOUT_SEC must be a positive integer."
     }
 
-    $allowedOptional = @("agy", "herdr", "rtk", "droid", "hermes", "hermes-webui", "codeburn", "pi", "codegraph", "gws", "docling", "infisical")
+    $allowedOptional = @("agy", "herdr", "droid", "hermes", "hermes-webui", "codeburn", "pi", "codegraph", "gws", "docling", "infisical")
     foreach ($tool in (ConvertTo-VibeboxList $v.TOOLS_OPTIONAL)) {
         if ($tool -notin $allowedOptional) {
             throw "TOOLS_OPTIONAL contains unsupported tool '$tool'."

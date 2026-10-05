@@ -16,7 +16,6 @@ docker = "docker-ce"
 [optional]
 agy = "antigravity"
 herdr = "herdr"
-rtk = "rtk"
 droid = "droid"
 hermes = "hermes"
 hermes-webui = "hermes-webui"
