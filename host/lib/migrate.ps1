@@ -13,7 +13,7 @@ Set-StrictMode -Version Latest
 # The exclusion list lives in guest/regenerable.conf so the guest-side backup
 # producer and this host-side migration cannot drift apart.
 function Get-VibeboxRegenerablePaths {
-    $list = Join-Path (Get-VibeboxRepoRoot) "vm/guest/regenerable.conf"
+    $list = Join-Path (Get-VibeboxRepoRoot) "guest/regenerable.conf"
     if (-not (Test-Path -LiteralPath $list -PathType Leaf)) {
         throw "Missing $list; it defines what counts as regenerable."
     }

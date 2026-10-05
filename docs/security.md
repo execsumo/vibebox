@@ -45,7 +45,7 @@ remains excluded because duplicating the machine identity is unsafe.
 Rotate a Tailscale key by revoking the old key in the tailnet admin console,
 running `vibebox enroll tailscale`, and checking `vibebox status`. Rotate the
 backup key by removing its restricted `authorized_keys` line and deleting the
-ignored host files `vm/state/backup/<name>-ed25519` and `.pub`, then running
+ignored host files `state/backup/<name>-ed25519` and `.pub`, then running
 `vibebox backup` once to generate and install a new key.
 
 Tailnet Services also require an administrator to permit each registry name in
@@ -75,7 +75,7 @@ credential. That is the habit this edition breaks.
 
 **Infisical is the secret store.** Nothing else is.
 
-- `vm/vibebox.env` holds non-secret configuration only. `vibebox doctor`
+- `vibebox.env` holds non-secret configuration only. `vibebox doctor`
   **fails** if it finds a key-shaped value there, naming the variable.
 - `vibebox enroll` handles only the credentials needed to *bootstrap* the box
   into a usable state — the Tailscale auth key, GitHub login. These are

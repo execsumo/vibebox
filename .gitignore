@@ -8,8 +8,7 @@ backups/
 *.log
 .delegate/
 
-# VM host configuration and generated local evidence
-vm/vibebox.env
-vm/state/
-vm/backups/
-vm/docs/evidence/*.raw
+# Host configuration and generated evidence
+vibebox.env
+state/
+docs/evidence/*.raw

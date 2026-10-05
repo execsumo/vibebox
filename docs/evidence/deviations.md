@@ -2,7 +2,7 @@
 
 Status: **proposed, awaiting user acceptance**
 Raised: 2026-09-13
-Against: [`docs/vm-work-orders.md`](../../../docs/vm-work-orders.md)
+Against: [`legacy/docs/vm-work-orders.md`](../../legacy/docs/vm-work-orders.md)
 
 Work order §8.9 requires proposing a change rather than silently deviating.
 Each item below states what the work order specified, what was done instead,

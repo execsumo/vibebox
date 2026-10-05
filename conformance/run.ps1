@@ -10,9 +10,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
-$root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-. (Join-Path $root "vm\host\lib\config.ps1")
-. (Join-Path $root "vm\host\lib\lifecycle.ps1")
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $root "host\lib\config.ps1")
+. (Join-Path $root "host\lib\lifecycle.ps1")
 
 $config = Get-VibeboxConfig -CreateIfMissing
 if ([string]::IsNullOrWhiteSpace($Name)) { $Name = $config.Values.VM_NAME }
@@ -34,7 +34,7 @@ function Add-CheckOutput {
     }
 }
 
-$guestRoot = Join-Path $root "vm\conformance"
+$guestRoot = Join-Path $root "conformance"
 Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "rm", "-rf", "/tmp/guest", "/tmp/vibebox-conformance") | Out-Null
 Invoke-VibeboxMultipass -Arguments @("transfer", "--recursive", (Join-Path $guestRoot "guest"), "${Name}:/tmp") | Out-Null
 Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "mkdir", "-p", "/tmp/vibebox-conformance") | Out-Null

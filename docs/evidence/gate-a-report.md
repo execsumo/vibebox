@@ -11,7 +11,7 @@ the user was away.
 ## 1. Conformance results
 
 16 pass, 1 fail, 5 skip. Full table and analysis in
-[`phase-6-conformance.md`](./phase-6-conformance.md).
+[`phase-6-conformance.md`](phase-6-conformance.md).
 
 The single failure (`41-tailnet`) is Tailscale enrollment, which needs a
 secret only the user can supply. **No exception is proposed**; it is a real
@@ -24,7 +24,7 @@ naive consumer parsed `GUEST_USER` as `herwin\r`). Details in that file.
 ## 2. Soak findings
 
 **Not performed.** A reduction from the specified 7-day soak is proposed in
-[`deviations.md`](./deviations.md) D-4 and has not been accepted. What has
+[`deviations.md`](deviations.md) D-4 and has not been accepted. What has
 been demonstrated instead:
 
 - Full destroy → create → provision cycles completed in **4.2 minutes**.

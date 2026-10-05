@@ -85,7 +85,7 @@ the check is whether a human reaches a **login prompt** with `sshd` stopped,
 and that cannot be asserted by a program that only sees exit codes.
 
 This remains the work order's hard gate (§8.4). See
-[`gate-a-report.md`](./gate-a-report.md) §7 for the exact steps and why it is
+[`gate-a-report.md`](gate-a-report.md) §7 for the exact steps and why it is
 worth doing before any real data moves.
 
 ## 5. Why the previous record was wrong

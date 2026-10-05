@@ -25,7 +25,7 @@ function Enable-VibeboxBackupSchedule {
     if ($At -notmatch '^([01]?\d|2[0-3]):[0-5]\d$') {
         throw "Schedule time must be HH:mm in 24-hour form, for example 02:15."
     }
-    $entry = Join-Path (Get-VibeboxRepoRoot) "vm\host\vibebox.ps1"
+    $entry = Join-Path (Get-VibeboxRepoRoot) "host\vibebox.ps1"
     if (-not (Test-Path -LiteralPath $entry -PathType Leaf)) {
         throw "Could not locate vibebox.ps1 at $entry."
     }
@@ -44,7 +44,7 @@ function Enable-VibeboxBackupSchedule {
         -AllowStartIfOnBatteries `
         -ExecutionTimeLimit (New-TimeSpan -Hours 4) `
         -MultipleInstances IgnoreNew
-    $description = "Pulls a Vibebox backup of /home/$($Config.Values.GUEST_USER) to $($Config.Values.BACKUP_DEST). Regenerable paths are excluded per vm/guest/regenerable.conf."
+    $description = "Pulls a Vibebox backup of /home/$($Config.Values.GUEST_USER) to $($Config.Values.BACKUP_DEST). Regenerable paths are excluded per guest/regenerable.conf."
 
     $existing = Get-VibeboxBackupTask
     if ($null -ne $existing) {

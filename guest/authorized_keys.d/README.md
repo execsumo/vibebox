@@ -3,8 +3,8 @@
 Drop one public key per file here, named for the device it belongs to:
 
 ```
-vm/guest/authorized_keys.d/laptop.pub
-vm/guest/authorized_keys.d/phone.pub
+guest/authorized_keys.d/laptop.pub
+guest/authorized_keys.d/phone.pub
 ```
 
 `vibebox provision` installs every `.pub` in this directory into the guest
@@ -21,8 +21,8 @@ reason the tailnet registry lives in `guest/tailnet.d/`.
 
 Public keys are not secrets — they are published to every server you connect
 to — so committing them is safe and is the point. Never put a **private** key
-here; nothing in `vm/guest/` should ever hold one.
+here; nothing in `guest/` should ever hold one.
 
-The host's own managed key (`vm/state/ssh/id_ed25519.pub`) is installed
+The host's own managed key (`state/ssh/id_ed25519.pub`) is installed
 separately by cloud-init and re-asserted by `vibebox migrate`. You do not need
 to copy it here.

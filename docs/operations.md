@@ -1,6 +1,6 @@
 # VM operations
 
-The host entry point is `vm/host/vibebox.ps1`. Run it from **PowerShell 7
+The host entry point is `host/vibebox.ps1`. Run it from **PowerShell 7
 (`pwsh`)** on the Windows host. Windows PowerShell 5.1 is not supported. The
 guest remains usable with ordinary Ubuntu commands: `systemctl`, `journalctl`,
 `apt`, `ss`, and the native Docker CLI.
@@ -20,12 +20,12 @@ VM normally comes back on its own after a Windows restart.
 ## Lifecycle
 
 ```powershell
-.\vm\host\vibebox.ps1 doctor
-.\vm\host\vibebox.ps1 create
-.\vm\host\vibebox.ps1 status
-.\vm\host\vibebox.ps1 ssh
-.\vm\host\vibebox.ps1 stop
-.\vm\host\vibebox.ps1 start
+.\host\vibebox.ps1 doctor
+.\host\vibebox.ps1 create
+.\host\vibebox.ps1 status
+.\host\vibebox.ps1 ssh
+.\host\vibebox.ps1 stop
+.\host\vibebox.ps1 start
 ```
 
 `destroy` and `rebuild` print the resolved instance and require `-Confirm`.
@@ -33,10 +33,10 @@ They never target an instance without a Vibebox state marker.
 
 ## Configuration
 
-Edit the ignored `vm/vibebox.env`, then use:
+Edit the ignored `vibebox.env`, then use:
 
 ```powershell
-.\vm\host\vibebox.ps1 config show
+.\host\vibebox.ps1 config show
 ```
 
 `VM_CPUS`, `VM_MEMORY`, `VM_DISK`, `UBUNTU_RELEASE`, `VM_NAME` and
@@ -56,9 +56,9 @@ be changed by provisioning.
 Backups are host-initiated and use a restricted key:
 
 ```powershell
-.\vm\host\vibebox.ps1 backup -Label before-change
-.\vm\host\vibebox.ps1 restore -Archive D:\vibebox-backups\vibebox-vm\vibebox-vm-backup-before-change.tar.gz -DryRun
-.\vm\host\vibebox.ps1 restore -Archive D:\vibebox-backups\vibebox-vm\vibebox-vm-backup-before-change.tar.gz
+.\host\vibebox.ps1 backup -Label before-change
+.\host\vibebox.ps1 restore -Archive D:\vibebox-backups\vibebox-vm\vibebox-vm-backup-before-change.tar.gz -DryRun
+.\host\vibebox.ps1 restore -Archive D:\vibebox-backups\vibebox-vm\vibebox-vm-backup-before-change.tar.gz
 ```
 
 Restore is name-bound, refuses unsafe archive paths, maps ownership by Linux
@@ -68,13 +68,13 @@ runs without vibebox needing to know what they are. Linger starts the user
 manager again afterwards. Backup
 archives without quiesce hooks are labeled crash-consistent.
 
-Tailnet names are tracked in `vm/guest/tailnet.d/` and reconciled through the
+Tailnet names are tracked in `guest/tailnet.d/` and reconciled through the
 namespaced command:
 
 ```powershell
-.\vm\host\vibebox.ps1 tailnet list
-.\vm\host\vibebox.ps1 tailnet add hermes --target http://127.0.0.1:8787
-.\vm\host\vibebox.ps1 tailnet apply
+.\host\vibebox.ps1 tailnet list
+.\host\vibebox.ps1 tailnet add hermes --target http://127.0.0.1:8787
+.\host\vibebox.ps1 tailnet apply
 ```
 
 The guest uses one Tailscale node and Tailscale Services. The tailnet policy
@@ -92,7 +92,7 @@ update os         # apt only
 ```
 
 ```powershell
-.\vm\host\vibebox.ps1 update [-ToolsOnly|-OsOnly]
+.\host\vibebox.ps1 update [-ToolsOnly|-OsOnly]
 ```
 
 It uses `apt-get upgrade`, never `full-upgrade`: full-upgrade may remove
@@ -133,14 +133,14 @@ OS services needing a restart are reported, not restarted. Runs cannot overlap
 (a lock serializes them).
 
 ```powershell
-.\vm\host\vibebox.ps1 maintenance apply        # push vibebox.env, (re)schedule
-.\vm\host\vibebox.ps1 maintenance status       # schedules, next and last run
-.\vm\host\vibebox.ps1 maintenance run daily    # run now, show the output
+.\host\vibebox.ps1 maintenance apply        # push vibebox.env, (re)schedule
+.\host\vibebox.ps1 maintenance status       # schedules, next and last run
+.\host\vibebox.ps1 maintenance run daily    # run now, show the output
 ```
 
 In the guest they are `vibebox-maintenance-{daily,weekly}.timer` driving
 `vibebox-maintenance@.service`; `journalctl -u 'vibebox-maintenance@*'` shows
-every run. The implementation is `vm/guest/maintenance.sh`. Ubuntu's
+every run. The implementation is `guest/maintenance.sh`. Ubuntu's
 unattended upgrades continue to apply security fixes daily on their own.
 
 `vibebox provision` re-runs all idempotent guest phases. `vibebox rebuild`
@@ -150,9 +150,9 @@ data only after inspecting a dry run.
 ## Diagnostics
 
 ```powershell
-.\vm\host\vibebox.ps1 status -Json
-.\vm\host\vibebox.ps1 conformance -Json
-.\vm\host\vibebox.ps1 console
+.\host\vibebox.ps1 status -Json
+.\host\vibebox.ps1 conformance -Json
+.\host\vibebox.ps1 console
 ```
 
 If `start` or `create` sits on "Starting" or fails with `Host network
@@ -173,8 +173,8 @@ VM. It is read-only at the source: the input is a tarball the legacy box
 produced, and nothing is ever run against the legacy container.
 
 ```powershell
-.\vm\host\vibebox.ps1 migrate -Archive <path\to\backup.tar.gz> -SourceUser dev -DryRun
-.\vm\host\vibebox.ps1 migrate -Archive <path\to\backup.tar.gz> -SourceUser dev
+.\host\vibebox.ps1 migrate -Archive <path\to\backup.tar.gz> -SourceUser dev -DryRun
+.\host\vibebox.ps1 migrate -Archive <path\to\backup.tar.gz> -SourceUser dev
 ```
 
 Use an archive the **legacy box itself** created, not a copy of the home
@@ -205,9 +205,9 @@ means something referenced a path outside the home directory and needs a look.
 ## Scheduled backups
 
 ```powershell
-.\vm\host\vibebox.ps1 schedule enable -At 02:47
-.\vm\host\vibebox.ps1 schedule status
-.\vm\host\vibebox.ps1 schedule disable
+.\host\vibebox.ps1 schedule enable -At 02:47
+.\host\vibebox.ps1 schedule status
+.\host\vibebox.ps1 schedule disable
 ```
 
 `enable` registers a Windows scheduled task that runs `vibebox backup` daily.
@@ -227,7 +227,7 @@ archive, and stops it again. A backup fires on a clock, not on the VM's state.
 ### What is backed up
 
 Everything in the guest home **except** the paths listed in
-`vm/guest/regenerable.conf`. That file is the single source of truth: the
+`guest/regenerable.conf`. That file is the single source of truth: the
 guest-side backup producer reads it from `/opt/vibebox/regenerable.conf`, and
 host-side `vibebox migrate` reads it from the repository, so the two cannot
 drift apart.

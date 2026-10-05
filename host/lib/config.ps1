@@ -26,7 +26,7 @@ $script:VibeboxConfigKeys = @(
 )
 
 function Get-VibeboxRepoRoot {
-    return (Resolve-Path (Join-Path $PSScriptRoot "..\..\..")).Path
+    return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 }
 
 function Get-VibeboxPath {
@@ -35,13 +35,12 @@ function Get-VibeboxPath {
     $root = Get-VibeboxRepoRoot
     $paths = @{
         Root = $root
-        Vm = Join-Path $root "vm"
-        Env = Join-Path $root "vm\vibebox.env"
-        EnvExample = Join-Path $root "vm\vibebox.env.example"
-        State = Join-Path $root "vm\state"
-        CloudInitTemplate = Join-Path $root "vm\cloud-init\user-data.yaml.tmpl"
-        Guest = Join-Path $root "vm\guest"
-        Host = Join-Path $root "vm\host"
+        Env = Join-Path $root "vibebox.env"
+        EnvExample = Join-Path $root "vibebox.env.example"
+        State = Join-Path $root "state"
+        CloudInitTemplate = Join-Path $root "cloud-init\user-data.yaml.tmpl"
+        Guest = Join-Path $root "guest"
+        Host = Join-Path $root "host"
     }
 
     if (-not $paths.ContainsKey($Name)) {

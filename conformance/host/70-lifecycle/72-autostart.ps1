@@ -2,7 +2,7 @@ param([Parameter(Mandatory)][string]$Name)
 $ErrorActionPreference = "Stop"
 
 # Vibebox no longer sets Hyper-V AutomaticStartAction (see
-# vm/docs/evidence/deviations.md, D-1). Multipass restores instances that were
+# docs/evidence/deviations.md, D-1). Multipass restores instances that were
 # running when the host shut down, so this check verifies that contract is at
 # least observable, and reports honestly when it cannot see Hyper-V.
 $vm = $null

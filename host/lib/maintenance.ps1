@@ -5,7 +5,7 @@ Set-StrictMode -Version Latest
 
 # Platform maintenance jobs in the guest. They are pre-installed by
 # provisioning; the user configures them with MAINTENANCE_* in vibebox.env.
-# The guest side is vm/guest/maintenance.sh.
+# The guest side is guest/maintenance.sh.
 
 function Show-VibeboxMaintenance {
     param([Parameter(Mandatory)][string]$Name)

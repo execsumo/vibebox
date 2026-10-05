@@ -10,7 +10,7 @@ version of vibebox into the VM version. Also, let's just call it 'vibebox' not
 'vibebox-vm' for live use."
 
 This is the Gate A go-ahead. It arrived before the Gate A report was written,
-so [`gate-a-report.md`](./gate-a-report.md) is a record rather than a request.
+so [`gate-a-report.md`](gate-a-report.md) is a record rather than a request.
 
 ## Done
 
@@ -20,7 +20,7 @@ so [`gate-a-report.md`](./gate-a-report.md) is a record rather than a request.
 - **Disk raised to 64 GB** at create time, since real data was about to land in
   it and the size is create-time only. Dynamically allocated, so unused
   capacity costs nothing.
-- **`vibebox migrate` written** (`vm/host/lib/migrate.ps1`) — the work order's
+- **`vibebox migrate` written** (`host/lib/migrate.ps1`) — the work order's
   Phase 7 deliverable. Read-only at the source; extracts to a staging
   directory rather than `/`; copies into the existing home instead of
   replacing it; assigns ownership by name; retargets absolute symlinks from
@@ -112,12 +112,12 @@ taskkill /F /T /IM multipassd.exe
 Start-Service Multipass
 
 # 2. Bring the VM up
-.\vm\host\vibebox.ps1 start
-.\vm\host\vibebox.ps1 status
+.\host\vibebox.ps1 start
+.\host\vibebox.ps1 status
 
 # 3. Migrate the baseline
-.\vm\host\vibebox.ps1 migrate -Archive .\backups\vibebox\vibebox-backup-migrate.tar.gz -SourceUser dev -DryRun
-.\vm\host\vibebox.ps1 migrate -Archive .\backups\vibebox\vibebox-backup-migrate.tar.gz -SourceUser dev
+.\host\vibebox.ps1 migrate -Archive .\backups\vibebox\vibebox-backup-migrate.tar.gz -SourceUser dev -DryRun
+.\host\vibebox.ps1 migrate -Archive .\backups\vibebox\vibebox-backup-migrate.tar.gz -SourceUser dev
 ```
 
 Then, with the user present, take a fresh legacy backup and repeat step 3 with

@@ -4,12 +4,12 @@ Status: **run for the first time on 2026-09-13.** 16 pass, 1 fail, 5 skip.
 
 Previous record said "not run; the host has no Multipass installation." That
 was wrong on both counts — Multipass 1.16.3 was installed, and its daemon was
-wedged rather than absent. See [`phase-1.md`](./phase-1.md) §5.
+wedged rather than absent. See [`phase-1.md`](phase-1.md) §5.
 
 Run against instance `vibebox-vm`, Ubuntu 24.04.4, guest user `herwin`.
 
 ```
-.\vm\conformance\run.ps1 -Full
+.\conformance\run.ps1 -Full
 ```
 
 ## Results
@@ -60,7 +60,7 @@ states its reason in its own output:
 - **70-state / 72-autostart** need `Get-VM`, which needs elevation. `70-state`
   verifies what Multipass can see instead (instance exists, is running).
   `72-autostart` now checks a property Vibebox no longer sets — see
-  [`deviations.md`](./deviations.md) D-1 — so it is arguably obsolete rather
+  [`deviations.md`](deviations.md) D-1 — so it is arguably obsolete rather
   than skipped.
 - **71-sleep-resume** cannot be triggered safely from a script.
 - **27-tunnels** needs a second host.
@@ -72,7 +72,7 @@ immediately. This is the argument for running things rather than reviewing
 them:
 
 1. **Every guest check exited 127.** `run.ps1` flattened the `guest/`
-   directory when transferring, so each check's `../../lib.sh` resolved one
+   directory when transferring, so each check's `..lib.sh` resolved one
    level too high and the `ok`/`fail` helpers were undefined. All 13 guest
    checks were "failing" for a reason that had nothing to do with the guest.
 2. **`60-mounts` reported a false failure.** Multipass reports "no mounts" as
