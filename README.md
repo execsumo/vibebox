@@ -1,13 +1,18 @@
 # Vibebox
 
-Vibebox gives you a personal Linux server on your Windows machine: a clean
-Ubuntu 24.04 VM that behaves like a VPS. You work *inside* it -- your code,
-agents, containers, and services -- and vibebox looks after the machine
-underneath. It is managed from Windows with `host/vibebox.ps1`, using
-Multipass on Hyper-V, cloud-init for the non-secret first boot, and native
-Ubuntu systemd services.
+**A durable Linux workbench for AI agents on Windows.**
 
-## What vibebox does
+Vibebox gives you a clean Ubuntu 24.04 machine that behaves like a personal VPS,
+without making the VM itself another hobby. Your code, agents, containers, and
+services live inside it; Vibebox handles the boring operational layer underneath:
+provisioning, updates, networking, backup, restore, and health checks.
+
+It runs on Multipass + Hyper-V, is managed from Windows with
+`host/vibebox.ps1`, and is built around one operator-friendly idea:
+
+**The environment should be disposable. Your work shouldn't be.**
+
+## What Vibebox does
 
 - **Creates and runs the VM** -- `create`, `start`, `stop`, `rebuild`, with
   sizing and guest settings in one file, `vibebox.env`.
