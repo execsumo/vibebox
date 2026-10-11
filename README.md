@@ -118,6 +118,17 @@ to administrators. It never runs from the checkout, because that is user-writabl
 If a `create` or `rebuild` was cut short, running `create` again resumes it.
 `status` reports an unfinished creation as the `creation` check.
 
+### Upgrading from the old `vm/` layout
+
+Before the implementation moved to the repository root, `vibebox.env` and
+`state/` lived under `vm/`. Both are ignored by git, so the move left them
+behind and the first run created a fresh `vibebox.env` from the example. The
+symptom is `status` reporting a VM name that does not exist (`state: unknown`,
+"creation did not finish") while your real VM keeps running. Copy
+`vm\vibebox.env` to `vibebox.env` and `vm\state\*` into `state\`, then reset
+the permissions on `state\ssh\id_ed25519` so only your user can read it
+(`icacls state\ssh\id_ed25519 /inheritance:r /grant:r "$env:USERNAME:(R,W)"`).
+
 ## Configuration changes
 
 Edit the ignored host configuration file:
