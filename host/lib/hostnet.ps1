@@ -336,6 +336,15 @@ function Get-VibeboxHostNetworkGuardTask {
     return Get-ScheduledTask -TaskName $script:VibeboxHostnetTaskName -ErrorAction SilentlyContinue
 }
 
+# A SYSTEM task registered from an elevated shell is invisible to the
+# non-elevated user's Get-ScheduledTask, so that alone reports "not installed"
+# right after a successful enable. The admin-locked guard script is readable by
+# Users and exists exactly while the guard is installed (disable removes it).
+function Test-VibeboxHostNetworkGuardInstalled {
+    if ($null -ne (Get-VibeboxHostNetworkGuardTask)) { return $true }
+    return (Test-Path -LiteralPath $script:VibeboxHostnetGuardScript -PathType Leaf)
+}
+
 # The guard runs as SYSTEM at every boot, so its script lives where only
 # administrators can change it -- never in the user-writable repository, which
 # would hand SYSTEM to anything that can edit the checkout.
@@ -394,7 +403,9 @@ function Show-VibeboxHostNetworkStatus {
     Write-Host "Name resolution : $(if ($health.Ok) { 'ok' } else { 'STALE' })"
     Write-Host "  $($health.Detail)"
     $task = Get-VibeboxHostNetworkGuardTask
-    if ($null -eq $task) {
+    if ($null -eq $task -and (Test-VibeboxHostNetworkGuardInstalled)) {
+        Write-Host "Boot guard      : installed (run status elevated to see its last run)"
+    } elseif ($null -eq $task) {
         Write-Host "Boot guard      : not installed. Run 'vibebox hostnet enable' once so reboots cannot leave stale entries."
     } else {
         $info = Get-ScheduledTaskInfo -TaskName $script:VibeboxHostnetTaskName -ErrorAction SilentlyContinue

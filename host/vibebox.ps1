@@ -158,7 +158,7 @@ try {
             New-VibeboxInstance -Config $config | Out-Null
             Ensure-VibeboxRescuePassword -Name $config.Values.VM_NAME -User $config.Values.GUEST_USER | Out-Null
             Write-Host "Vibebox '$($config.Values.VM_NAME)' is ready."
-            if ($null -eq (Get-VibeboxHostNetworkGuardTask)) {
+            if (-not (Test-VibeboxHostNetworkGuardInstalled)) {
                 Write-Host "Next: install the boot guard so host reboots don't leave a stale address: .\host\vibebox.ps1 hostnet enable" -ForegroundColor Yellow
             }
             exit 0

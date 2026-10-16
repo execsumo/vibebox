@@ -19,7 +19,7 @@ if (-not $health.Current) {
     exit 1
 }
 
-$guard = Get-VibeboxHostNetworkGuardTask
-$guardNote = if ($null -eq $guard) { "; boot guard not installed" } else { "; boot guard installed" }
+$guardInstalled = Test-VibeboxHostNetworkGuardInstalled
+$guardNote = if (-not $guardInstalled) { "; boot guard not installed" } else { "; boot guard installed" }
 Write-Output "ok 73-hostnet - $Name.mshome.net resolves only to $($health.Current)$guardNote"
 exit 0
