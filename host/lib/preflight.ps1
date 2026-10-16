@@ -82,7 +82,7 @@ function Get-VibeboxPreflightResults {
 
     # Advisory: without the boot guard the stale entry comes back after the
     # next host reboot, and nothing says so until create or start hangs.
-    $guardMissing = $null -eq (Get-VibeboxHostNetworkGuardTask)
+    $guardMissing = -not (Test-VibeboxHostNetworkGuardInstalled)
     $null = $results.Add([pscustomobject]@{
         Id = "hostnet-guard"
         Ok = $true
