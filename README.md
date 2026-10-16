@@ -72,6 +72,7 @@ Each asks for elevation itself, with a single UAC prompt, for just that step.
 ```powershell
 .\host\vibebox.ps1 doctor
 .\host\vibebox.ps1 create
+.\host\vibebox.ps1 hostnet enable     # once per host; one UAC prompt (see below)
 .\host\vibebox.ps1 status
 .\host\vibebox.ps1 ssh
 .\host\vibebox.ps1 stop
@@ -105,8 +106,10 @@ restarts ICS and `multipassd`, and brings the VM back up:
 .\host\vibebox.ps1 hostnet repair
 ```
 
-To stop this happening at all, install the boot guard once. It is a SYSTEM
-startup task that does the same cleanup before anything dials the name:
+The boot guard, installed once during setup (see Lifecycle above), stops this
+happening at all. It is a SYSTEM startup task that does the same cleanup before
+anything dials the name. `doctor` warns and `create` reminds you when it is
+missing:
 
 ```powershell
 .\host\vibebox.ps1 hostnet enable     # hostnet disable removes it
