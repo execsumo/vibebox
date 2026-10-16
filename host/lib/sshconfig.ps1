@@ -26,9 +26,15 @@ function Get-VibeboxSshKey {
 function Update-VibeboxSshAlias {
     param(
         [Parameter(Mandatory)][string]$Name,
-        [Parameter(Mandatory)][string]$User,
-        [Parameter(Mandatory)][string]$Address
+        [Parameter(Mandatory)][string]$User
     )
+
+    # Point at the ICS DNS name, never the current IPv4. The Default Switch
+    # subnet moves across host reboots, so a pinned address goes dead and ssh
+    # just hangs on connect. ICS keeps <name>.mshome.net on the live lease
+    # (the host network guard prunes stale ones). HostKeyAlias keys known_hosts
+    # on the alias, so neither an address change nor this switch re-prompts.
+    $address = "$Name.mshome.net"
 
     $sshDirectory = Join-Path $HOME ".ssh"
     if (-not (Test-Path -LiteralPath $sshDirectory -PathType Container)) {
@@ -52,7 +58,9 @@ function Update-VibeboxSshAlias {
     $key = Get-VibeboxSshKey
     $filtered.Add($begin)
     $filtered.Add("Host $Name")
-    $filtered.Add("    HostName $Address")
+    $filtered.Add("    HostName $address")
+    $filtered.Add("    HostKeyAlias $Name")
+    $filtered.Add("    CheckHostIP no")
     $filtered.Add("    User $User")
     $filtered.Add("    IdentityFile $($key.PrivateKey)")
     $filtered.Add("    IdentitiesOnly yes")

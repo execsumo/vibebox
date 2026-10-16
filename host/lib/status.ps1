@@ -71,7 +71,7 @@ function Get-VibeboxStatus {
     $info = Get-VibeboxInstanceInfo -Name $Name
     $state = if ($null -eq $info) { "unknown" } elseif ($info.State -eq "RUNNING") { "running" } else { "stopped" }
     if ($null -ne $info -and $info.IPv4 -and $state -eq "running") {
-        Update-VibeboxSshAlias -Name $Name -User $Config.Values.GUEST_USER -Address $info.IPv4 | Out-Null
+        Update-VibeboxSshAlias -Name $Name -User $Config.Values.GUEST_USER | Out-Null
     }
     $live = if ($null -ne $info) {
         Get-VibeboxLiveResources -Name $Name -Info $info

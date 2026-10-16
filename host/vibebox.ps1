@@ -209,7 +209,7 @@ try {
             $config = Get-VibeboxConfig -CreateIfMissing
             $target = Resolve-VibeboxExistingName -Config $config
             $info = Start-VibeboxInstance -Name $target -Config $config
-            Update-VibeboxSshAlias -Name $target -User $config.Values.GUEST_USER -Address $info.IPv4 | Out-Null
+            Update-VibeboxSshAlias -Name $target -User $config.Values.GUEST_USER | Out-Null
             & ssh $target @RemainingArguments
             exit $LASTEXITCODE
         }
