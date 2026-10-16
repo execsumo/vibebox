@@ -80,6 +80,20 @@ function Get-VibeboxPreflightResults {
     $hostnet = Get-VibeboxHostNetworkHealth -Name $Config.Values.VM_NAME
     $null = $results.Add([pscustomobject]@{ Id = "hostnet-dns"; Ok = $hostnet.Ok; Detail = $hostnet.Detail })
 
+    # Advisory: without the boot guard the stale entry comes back after the
+    # next host reboot, and nothing says so until create or start hangs.
+    $guardMissing = $null -eq (Get-VibeboxHostNetworkGuardTask)
+    $null = $results.Add([pscustomobject]@{
+        Id = "hostnet-guard"
+        Ok = $true
+        Warning = $guardMissing
+        Detail = if ($guardMissing) {
+            "The hosts.ics boot guard is not installed, so a host reboot can leave a stale $($Config.Values.VM_NAME).mshome.net entry. Install it once: vibebox hostnet enable (one UAC prompt)."
+        } else {
+            "The hosts.ics boot guard is installed."
+        }
+    })
+
     # Hyper-V availability is proven by its services running, which any user can
     # read. Get-VM / Get-WindowsOptionalFeature need elevation and would only
     # re-answer the same question.

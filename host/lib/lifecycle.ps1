@@ -537,7 +537,7 @@ function Start-VibeboxInstance {
         }
     }
     $info = Wait-VibeboxInstance -Name $Name -TimeoutSeconds ([int]$Config.Values.READINESS_TIMEOUT_SEC)
-    Update-VibeboxSshAlias -Name $Name -User $Config.Values.GUEST_USER -Address $info.IPv4 | Out-Null
+    Update-VibeboxSshAlias -Name $Name -User $Config.Values.GUEST_USER | Out-Null
     return $info
 }
 
