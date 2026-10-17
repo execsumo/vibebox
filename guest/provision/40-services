@@ -18,6 +18,7 @@ install -m 0755 "$ROOT/grow-disk.sh" /usr/local/sbin/vibebox-grow-disk
 install -m 0755 "$ROOT/backup-producer" /usr/local/sbin/vibebox-backup-producer
 install -m 0755 "$ROOT/tailnet-reconcile.sh" /usr/local/sbin/vibebox-tailnet-reconcile
 install -m 0755 "$ROOT/tailnet-status.sh" /usr/local/sbin/vibebox-tailnet-status
+install -m 0755 "$ROOT/tailnet-mss.sh" /usr/local/sbin/vibebox-tailnet-mss
 install -d -m 0755 /etc/vibebox/tailnet.d
 find /etc/vibebox/tailnet.d -mindepth 1 -maxdepth 1 -type f -name '*.conf' -delete
 if [[ -d "$ROOT/tailnet.d" ]]; then
@@ -29,6 +30,8 @@ systemctl daemon-reload
 systemctl enable --now vibebox-grow-disk.service
 systemctl enable --now vibebox-tailnet.service
 systemctl restart vibebox-tailnet.service
+systemctl enable vibebox-tailnet-mss.service
+systemctl restart vibebox-tailnet-mss.service
 
 # Vibebox supervises only the platform. Applications the user runs -- Hermes,
 # its gateway, the WebUI, a droid daemon -- are the user's software: installed
