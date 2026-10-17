@@ -1,0 +1,14 @@
+[Unit]
+Description=Clamp TCP MSS on the Vibebox tailnet interface
+After=network-online.target tailscaled.service
+Wants=network-online.target
+ConditionPathExists=/usr/local/sbin/vibebox-tailnet-mss
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vibebox-tailnet-mss apply
+ExecStop=/usr/local/sbin/vibebox-tailnet-mss remove
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
