@@ -57,7 +57,7 @@ guest_user = os.environ.get("GUEST_USER", "")
 def version(tool):
     try:
         args = ["go", "version"] if tool == "go" else [tool, "--version"]
-        if tool in ("hermes", "hermes-webui"):
+        if tool in ("hermes", "hermes-webui", "deepseek-harness"):
             # User apps live in the guest user's home, not on root's PATH;
             # ask the copy the user actually runs.
             args = ["/opt/vibebox/user-apps.sh", "version", guest_user, tool]

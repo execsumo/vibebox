@@ -6,12 +6,13 @@
 #        user-apps.sh sync <user> <app>...
 #        user-apps.sh present <user> <app>
 #        user-apps.sh version <user> <app>
-# Apps:  hermes, hermes-webui
+# Apps:  hermes, hermes-webui, deepseek-harness
 
 set -Eeuo pipefail
 
 HERMES_INSTALLER=https://hermes-agent.nousresearch.com/install.sh
 WEBUI_REPO=https://github.com/nesquena/hermes-webui.git
+DSH_PACKAGE=@deepseek-ai/dsh
 
 action=${1:?action is required}
 user=${2:?user is required}
@@ -20,6 +21,8 @@ home=$(getent passwd "$user" | cut -d: -f6)
 [[ -n "$home" ]] || { printf 'no such user: %s\n' "$user" >&2; exit 1; }
 webui_dir="$home/.local/share/hermes-webui"
 webui_unit="$home/.config/systemd/user/hermes-webui.service"
+dsh_dir="$home/.local/share/deepseek-harness"
+dsh_unit="$home/.config/systemd/user/deepseek-harness.service"
 
 # Run as the user with a reachable user manager, so installers that register
 # systemd user services can talk to it. Linger (00-base) keeps it running.
@@ -44,6 +47,7 @@ present() {
     case "$1" in
         hermes) [[ -x "$home/.local/bin/hermes" ]] ;;
         hermes-webui) [[ -f "$webui_dir/start.sh" ]] ;;
+        deepseek-harness) [[ -x "$dsh_dir/bin/dsh" ]] ;;
         *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
     esac
 }
@@ -53,6 +57,9 @@ version() {
     case "$1" in
         hermes) as_user "$home/.local/bin/hermes" --version 2>/dev/null | head -n 1 ;;
         hermes-webui) as_user git -C "$webui_dir" log -1 --format='hermes-webui %h (%cs)' ;;
+        deepseek-harness)
+            as_user node -p "'deepseek-harness ' + require('$dsh_dir/node_modules/@deepseek-ai/dsh/package.json').version"
+            ;;
     esac
 }
 
@@ -103,6 +110,45 @@ EOF
     as_user systemctl --user enable --now hermes-webui.service
 }
 
+# DeepSeek Harness is an npm package (@deepseek-ai/dsh) with a Web UI that
+# `dsh web` serves on 127.0.0.1:3080. It is installed into the user's own
+# prefix, not globally, so the root-owned copy is never created. The package
+# declares Node.js >= 24.9 while the guest's toolchain is NODE_MAJOR; refuse
+# to install on an older runtime rather than leave a service that cannot start.
+install_deepseek_harness() {
+    if ! as_user node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 24 || (major === 24 && minor >= 9) ? 0 : 1)'; then
+        printf 'deepseek-harness: needs Node.js 24.9 or newer; found %s for %s\n' "$(as_user node --version)" "$user" >&2
+        return 1
+    fi
+    printf 'deepseek-harness: installing for %s from %s\n' "$user" "$DSH_PACKAGE"
+    as_user install -d "$dsh_dir" "$(dirname "$dsh_unit")"
+    as_user npm install --prefix "$dsh_dir" --no-fund --no-audit "$DSH_PACKAGE@latest"
+    if [[ ! -e "$dsh_unit" ]]; then
+        as_user tee "$dsh_unit" >/dev/null <<'EOF'
+# Installed once by vibebox (guest/user-apps.sh); yours to edit from here on.
+# The Web UI listens on 127.0.0.1:3080. Pass --host or --port to ExecStart to change it.
+[Unit]
+Description=DeepSeek Harness Web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/.local/share/deepseek-harness/bin/dsh web --no-open
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+EOF
+    fi
+    as_user systemctl --user daemon-reload
+    as_user systemctl --user enable --now deepseek-harness.service
+}
+
 update_app() {
     case "$1" in
         hermes)
@@ -117,6 +163,14 @@ update_app() {
                 as_user systemctl --user restart hermes-webui.service
             fi
             ;;
+        deepseek-harness)
+            before=$(version deepseek-harness)
+            as_user npm install --prefix "$dsh_dir" --no-fund --no-audit "$DSH_PACKAGE@latest"
+            after=$(version deepseek-harness)
+            if [[ "$before" != "$after" ]] && as_user systemctl --user is-active --quiet deepseek-harness.service; then
+                as_user systemctl --user restart deepseek-harness.service
+            fi
+            ;;
         *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
     esac
 }
@@ -125,6 +179,7 @@ install_app() {
     case "$1" in
         hermes) install_hermes ;;
         hermes-webui) install_hermes_webui ;;
+        deepseek-harness) install_deepseek_harness ;;
         *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
     esac
 }

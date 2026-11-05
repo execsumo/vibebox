@@ -86,7 +86,7 @@ enabled_optional() {
 # User applications live in the user's home and run as their own services.
 # Sync through each app's upstream updater; never install a root-owned copy.
 # Order matters: the WebUI needs Hermes.
-user_apps=(hermes hermes-webui)
+user_apps=(hermes hermes-webui deepseek-harness)
 user_apps_helper="$ROOT/user-apps.sh"
 
 is_user_app() {

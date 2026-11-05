@@ -1,7 +1,7 @@
 # Tool policy for the VM edition. Resolved versions are written to manifest.lock.
 
 [policy]
-node_major = 22
+node_major = 24
 update = "latest"
 
 [required]
@@ -19,6 +19,7 @@ herdr = "herdr"
 droid = "droid"
 hermes = "hermes"
 hermes-webui = "hermes-webui"
+deepseek-harness = "@deepseek-ai/dsh"
 codeburn = "codeburn"
 pi = "@earendil-works/pi-coding-agent"
 codegraph = "@colbymchenry/codegraph"

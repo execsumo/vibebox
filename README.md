@@ -42,7 +42,7 @@ their configuration and user services remain yours. See
 | Network | Tailscale (join with `vibebox enroll tailscale`) | vibebox |
 | Developer CLIs | Node.js (`NODE_MAJOR`), `claude`, `codex`, `bun`, `gh`, and language servers (pyright, TypeScript, YAML, Bash, Tailwind, VS Code HTML/CSS/JSON) | vibebox: daily maintenance, `vibebox update` |
 | Optional CLIs | Whatever `TOOLS_OPTIONAL` lists from: `agy`, `herdr`, `droid`, `codeburn`, `pi`, `codegraph`, `gws`, `docling`, `infisical` | vibebox: daily maintenance, `vibebox update` |
-| User applications | `hermes` (Hermes Agent) and `hermes-webui` (Hermes WebUI), when listed in `TOOLS_OPTIONAL` | vibebox installs and updates with upstream tools; you own configuration and user services |
+| User applications | `hermes` (Hermes Agent), `hermes-webui` (Hermes WebUI), and `deepseek-harness` (DeepSeek Harness Web UI, needs Node.js 24.9+), when listed in `TOOLS_OPTIONAL` | vibebox installs and updates with upstream tools; you own configuration and user services |
 | Platform services | Maintenance jobs, backup producer, disk auto-grow, tailnet reconcile | vibebox |
 
 Vibebox installs developer and optional tools system-wide. Hermes and the
@@ -433,9 +433,9 @@ start. After editing, apply without re-provisioning:
 | daily | 01:00 | `update tools`: the developer and optional CLIs |
 | weekly | Sunday 02:00 | `update all`: OS packages and the toolchain; then trims the journal (500 MB / 30 days) and removes Docker images and build cache unused for a week |
 
-Maintenance updates Hermes and the WebUI only when listed in
-`TOOLS_OPTIONAL`; the WebUI is restarted only if its code changed and its user
-service was active. It does not change their configuration, remove containers
+Maintenance updates Hermes, the WebUI, and DeepSeek Harness only when listed in
+`TOOLS_OPTIONAL`; the WebUIs are restarted only if their code changed and their
+user service was active. It does not change their configuration, remove containers
 or volumes, or reboot. It reports OS services needing a restart and pending
 reboots; act on those with `vibebox restart` when it suits you.
 Ubuntu's own unattended upgrades still apply security fixes daily.
@@ -466,7 +466,7 @@ follows from that.
 | | Examples | Installed by | Updated, configured, restarted by |
 |---|---|---|---|
 | **Platform** | OS, Docker, Tailscale, backups, shared CLIs (`claude`, `codex`, `gh`, ...), linger | vibebox (`provision`) | vibebox (`vibebox update`, `vibebox.env`) |
-| **User applications** | Hermes and its gateway, Hermes WebUI | vibebox, when listed in `TOOLS_OPTIONAL` | vibebox updates with upstream tools; **you** configure and manage services |
+| **User applications** | Hermes and its gateway, Hermes WebUI, DeepSeek Harness Web UI | vibebox, when listed in `TOOLS_OPTIONAL` | vibebox updates with upstream tools; **you** configure and manage services |
 | **Your own software** | anything else you install or run | you | you |
 
 A pre-installed user application:
@@ -510,6 +510,32 @@ follows upstream's
 and is yours to edit. To skip a pre-installed application, leave it out of
 `TOOLS_OPTIONAL`; to remove one, use its own uninstall (`hermes uninstall`, or
 disable the unit and delete the checkout).
+
+### DeepSeek Harness (optional)
+
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`, MIT)
+is an agent harness from DeepSeek AI, shipped as the npm package
+`@deepseek-ai/dsh`. It is pre-packaged and listed in the example `TOOLS_OPTIONAL`.
+The package needs Node.js 24.9+, which `NODE_MAJOR=24` provides. Existing
+`vibebox.env` files keep their own list: to add it, include `deepseek-harness` in
+`TOOLS_OPTIONAL`, set `NODE_MAJOR=24` or newer, then run `vibebox update tools`.
+
+Vibebox installs it into `~/.local/share/deepseek-harness` with npm, never
+globally, and runs `dsh web --no-open` as the user service `deepseek-harness`.
+The Web UI listens on `127.0.0.1:3080` only. Its unit is
+`~/.config/systemd/user/deepseek-harness.service`, yours to edit.
+
+| Task | Command |
+|---|---|
+| Restart the Web UI | `systemctl --user restart deepseek-harness` |
+| Update DeepSeek Harness | `npm install --prefix ~/.local/share/deepseek-harness @deepseek-ai/dsh@latest`, then restart it |
+| Remove it | Take it out of `TOOLS_OPTIONAL`, `systemctl --user disable --now deepseek-harness`, and delete `~/.local/share/deepseek-harness` |
+
+The upstream project is a **developer preview** with a
+[safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md):
+it can run model-generated commands and load third-party plugins, and it has not
+had a security audit. Run it in this VM, not on your host, and do not expose its
+port beyond the VM.
 
 
 ## Tailnet URLs
