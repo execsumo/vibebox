@@ -57,7 +57,7 @@ function Get-VibeboxTailnetStatus {
     param([Parameter(Mandatory)][string]$Name)
     $result = Invoke-VibeboxMultipass -Arguments @("exec", $Name, "--", "sudo", "/opt/vibebox/tailnet-status.sh") -AllowFailure
     if ($result.ExitCode -ne 0) { return $null }
-    return (($result.Output -join [Environment]::NewLine) | ConvertFrom-Json)
+    return (($result.Stdout -join [Environment]::NewLine) | ConvertFrom-Json)
 }
 
 function Add-VibeboxTailnetService {

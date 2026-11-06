@@ -36,6 +36,9 @@ as_user() {
     done
     # setpriv, not runuser: no PAM session, so routine version checks do not
     # log a session open/close pair on every maintenance run.
+    # Start in the user's home: node and npm look for package.json from the
+    # working directory upward, and the caller's directory may be unreadable.
+    cd "$home"
     setpriv --reuid="$user" --regid="$user" --init-groups -- env \
         HOME="$home" USER="$user" LOGNAME="$user" \
         XDG_RUNTIME_DIR="/run/user/$uid" \
@@ -48,7 +51,7 @@ present() {
     case "$1" in
         hermes) [[ -x "$home/.local/bin/hermes" ]] ;;
         hermes-webui) [[ -f "$webui_dir/start.sh" ]] ;;
-        deepseek-harness) [[ -x "$dsh_dir/bin/dsh" ]] ;;
+        deepseek-harness) [[ -x "$dsh_dir/node_modules/.bin/dsh" ]] ;;
         *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
     esac
 }
@@ -111,6 +114,17 @@ EOF
     as_user systemctl --user enable --now hermes-webui.service
 }
 
+# npm --prefix puts the launcher under node_modules/.bin. Units written before
+# that was known point at a bin/dsh that is never created. Repoint only that
+# exact ExecStart, leaving any other edits the user made. Returns 0 if changed.
+repoint_dsh_unit() {
+    if as_user grep -q 'ExecStart=%h/.local/share/deepseek-harness/bin/dsh ' "$dsh_unit" 2>/dev/null; then
+        as_user sed -i 's#ExecStart=%h/.local/share/deepseek-harness/bin/dsh #ExecStart=%h/.local/share/deepseek-harness/node_modules/.bin/dsh #' "$dsh_unit"
+        return 0
+    fi
+    return 1
+}
+
 # DeepSeek Harness is an npm package (@deepseek-ai/dsh) with a Web UI that
 # `dsh web` serves on 127.0.0.1:3080. It is installed into the user's own
 # prefix, not globally, so the root-owned copy is never created. The package
@@ -136,7 +150,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h
-ExecStart=%h/.local/share/deepseek-harness/bin/dsh web --no-open
+ExecStart=%h/.local/share/deepseek-harness/node_modules/.bin/dsh web --no-open
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
@@ -146,6 +160,7 @@ StandardError=journal
 WantedBy=default.target
 EOF
     fi
+    repoint_dsh_unit || true
     as_user systemctl --user daemon-reload
     as_user systemctl --user enable --now deepseek-harness.service
 }
@@ -168,7 +183,12 @@ update_app() {
             before=$(version deepseek-harness)
             as_user npm install --prefix "$dsh_dir" --no-fund --no-audit "$DSH_PACKAGE@latest"
             after=$(version deepseek-harness)
-            if [[ "$before" != "$after" ]] && as_user systemctl --user is-active --quiet deepseek-harness.service; then
+            unit_changed=false
+            repoint_dsh_unit && unit_changed=true
+            if [[ "$unit_changed" == true ]]; then
+                as_user systemctl --user daemon-reload
+            fi
+            if [[ "$before" != "$after" || "$unit_changed" == true ]] && as_user systemctl --user is-active --quiet deepseek-harness.service; then
                 as_user systemctl --user restart deepseek-harness.service
             fi
             ;;

@@ -45,8 +45,10 @@ function Invoke-VibeboxMultipass {
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         $output = @()
+        $stdoutLines = @()
         if (-not [string]::IsNullOrEmpty($stdout)) {
-            $output += $stdout -split "`r?`n" | Where-Object { $_ -ne "" }
+            $stdoutLines = @($stdout -split "`r?`n" | Where-Object { $_ -ne "" })
+            $output += $stdoutLines
         }
         if (-not [string]::IsNullOrEmpty($stderr)) {
             $output += $stderr -split "`r?`n" | Where-Object { $_ -ne "" }
@@ -58,7 +60,10 @@ function Invoke-VibeboxMultipass {
     if ($exitCode -ne 0 -and -not $AllowFailure) {
         throw "multipass $($Arguments -join ' ') failed with exit code $exitCode`n$($output -join [Environment]::NewLine)"
     }
-    return [pscustomobject]@{ Output = @($output); ExitCode = $exitCode }
+    # Output mixes stderr in for error messages. Parse Stdout when the result is
+    # JSON: Multipass writes warnings (such as the Hyper-V deprecation notice)
+    # to stderr, and they would make the document invalid.
+    return [pscustomobject]@{ Output = @($output); Stdout = @($stdoutLines); ExitCode = $exitCode }
 }
 
 function Get-VibeboxStateDirectory {
@@ -129,7 +134,7 @@ function Get-VibeboxInstanceInfo {
         return $null
     }
     try {
-        $json = ($result.Output -join [Environment]::NewLine) | ConvertFrom-Json
+        $json = ($result.Stdout -join [Environment]::NewLine) | ConvertFrom-Json
     } catch {
         throw "Multipass returned invalid JSON for instance '$Name': $($_.Exception.Message)"
     }

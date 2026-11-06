@@ -76,7 +76,7 @@ if [[ "${TOOLS_UPDATE_POLICY}" == "locked" ]]; then
 fi
 
 enabled_optional() {
-    local wanted=$1
+    local wanted=$1 tool
     for tool in "${optional_tools[@]}"; do
         [[ "$tool" == "$wanted" ]] && return 0
     done
@@ -240,11 +240,11 @@ remove_optional_tool() {
 }
 
 for ((i = ${#VIBEBOX_OPTIONAL_TOOLS[@]} - 1; i >= 0; i--)); do
-    tool=${VIBEBOX_OPTIONAL_TOOLS[i]}
-    enabled_optional "$tool" && continue
-    tool_present "$tool" || continue
-    printf 'optional: removing %s (%s=false)\n' "$tool" "$(optional_tool_var "$tool")"
-    remove_optional_tool "$tool" || printf 'optional: removing %s failed\n' "$tool" >&2
+    candidate=${VIBEBOX_OPTIONAL_TOOLS[i]}
+    enabled_optional "$candidate" && continue
+    tool_present "$candidate" || continue
+    printf 'optional: removing %s (%s is not true)\n' "$candidate" "$(optional_tool_var "$candidate")"
+    remove_optional_tool "$candidate" || printf 'optional: removing %s failed\n' "$candidate" >&2
 done
 
 missing_required=()

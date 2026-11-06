@@ -55,7 +55,7 @@ function Get-VibeboxGuestStatus {
         return $null
     }
     try {
-        return (($result.Output -join [Environment]::NewLine) | ConvertFrom-Json)
+        return (($result.Stdout -join [Environment]::NewLine) | ConvertFrom-Json)
     } catch {
         Write-Warning "Guest status was not valid JSON: $($_.Exception.Message)"
         return $null
