@@ -41,13 +41,13 @@ their configuration and user services remain yours. See
 | Containers | Docker Engine with Compose and Buildx; your user is in the `docker` group | vibebox |
 | Network | Tailscale (join with `vibebox enroll tailscale`) | vibebox |
 | Developer CLIs | Node.js (`NODE_MAJOR`), `claude`, `codex`, `bun`, `gh`, and language servers (pyright, TypeScript, YAML, Bash, Tailwind, VS Code HTML/CSS/JSON) | vibebox: daily maintenance, `vibebox update` |
-| Optional CLIs | Whatever `TOOLS_OPTIONAL` lists from: `agy`, `herdr`, `droid`, `codeburn`, `pi`, `codegraph`, `gws`, `docling`, `infisical` | vibebox: daily maintenance, `vibebox update` |
-| User applications | `hermes` (Hermes Agent), `hermes-webui` (Hermes WebUI), and `deepseek-harness` (DeepSeek Harness Web UI, needs Node.js 24.9+), when listed in `TOOLS_OPTIONAL` | vibebox installs and updates with upstream tools; you own configuration and user services |
+| Optional CLIs | Each `TOOL_*` flag set to `true`: `agy`, `herdr`, `droid`, `codeburn`, `pi`, `codegraph`, `gws`, `docling`, `infisical` | vibebox: daily maintenance, `vibebox update` |
+| User applications | `hermes` (Hermes Agent), `hermes-webui` (Hermes WebUI), and `deepseek-harness` (DeepSeek Harness Web UI, needs Node.js 24.9+), when their `TOOL_*` flag is `true` | vibebox installs and updates with upstream tools; you own configuration and user services |
 | Platform services | Maintenance jobs, backup producer, disk auto-grow, tailnet reconcile | vibebox |
 
 Vibebox installs developer and optional tools system-wide. Hermes and the
 WebUI live in your home and run as your user services; when enabled in
-`TOOLS_OPTIONAL`, daily maintenance updates them using their upstream methods.
+their `TOOL_*` flags are `true`, daily maintenance updates them using their upstream methods.
 See [Your applications](#what-vibebox-owns-and-what-you-own) for details.
 
 ## Prerequisites
@@ -163,6 +163,23 @@ Guest policy (`GUEST_UFW`, `GUEST_SWAP_GB`, `GUEST_TIMEZONE`, `NODE_MAJOR`,
 `TOOLS_*`) applies any time via `vibebox provision`, which is idempotent.
 Maintenance settings (`MAINTENANCE_*`) apply in seconds with
 `vibebox maintenance apply`; see [Maintenance](#maintenance).
+
+### Optional tools
+
+Each optional tool has its own flag. `true` installs it and keeps it current;
+`false` removes it:
+
+```ini
+TOOL_HERDR=true
+TOOL_DOCLING=false
+```
+
+Apply a change with `vibebox provision` or `vibebox update tools`. Daily
+maintenance applies it as well. Removal deletes the tool's code and launcher
+(for Hermes, `~/.hermes` configuration is kept; the WebUI and DeepSeek Harness
+unit files are left disabled, so you can delete them yourself). Required
+tools are never removed. A leftover `TOOLS_OPTIONAL` line is an error: replace
+it with the per-tool flags.
 
 The VM disk is grow-only. `destroy` and `rebuild` require `-Confirm` and
 refuse unmanaged instances.
@@ -347,7 +364,7 @@ From the Windows host:
 | Mode | Does |
 |---|---|
 | `os` | `apt-get update`, `apt-get upgrade`, `autoremove`, `clean`. Not `full-upgrade` -- that can *remove* packages to resolve dependencies, which is not a decision an update should make unattended. |
-| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses. Optional apps listed in `TOOLS_OPTIONAL` are installed if missing and updated when present (unless `TOOLS_UPDATE_POLICY=locked`); Hermes and the WebUI use their upstream update methods, and Pi refreshes the guest user's extensions with `pi update --extensions`. Records resolved versions in `manifest.lock`. |
+| `tools` | Re-runs `guest/provision/30-tools`, the same code path `provision` uses. Optional tools whose `TOOL_*` flag is `true` are installed if missing and updated when present (unless `TOOLS_UPDATE_POLICY=locked`); tools flagged `false` are removed if present; Hermes and the WebUI use their upstream update methods, and Pi refreshes the guest user's extensions with `pi update --extensions`. Records resolved versions in `manifest.lock`. |
 | `all` | Both, in that order. |
 
 `update` does **not** touch the OS contract: it never changes the Ubuntu
@@ -434,7 +451,7 @@ start. After editing, apply without re-provisioning:
 | weekly | Sunday 02:00 | `update all`: OS packages and the toolchain; then trims the journal (500 MB / 30 days) and removes Docker images and build cache unused for a week |
 
 Maintenance updates Hermes, the WebUI, and DeepSeek Harness only when listed in
-`TOOLS_OPTIONAL`; the WebUIs are restarted only if their code changed and their
+their `TOOL_*` flags are `true`; the WebUIs are restarted only if their code changed and their
 user service was active. It does not change their configuration, remove containers
 or volumes, or reboot. It reports OS services needing a restart and pending
 reboots; act on those with `vibebox restart` when it suits you.
@@ -466,7 +483,7 @@ follows from that.
 | | Examples | Installed by | Updated, configured, restarted by |
 |---|---|---|---|
 | **Platform** | OS, Docker, Tailscale, backups, shared CLIs (`claude`, `codex`, `gh`, ...), linger | vibebox (`provision`) | vibebox (`vibebox update`, `vibebox.env`) |
-| **User applications** | Hermes and its gateway, Hermes WebUI, DeepSeek Harness Web UI | vibebox, when listed in `TOOLS_OPTIONAL` | vibebox updates with upstream tools; **you** configure and manage services |
+| **User applications** | Hermes and its gateway, Hermes WebUI, DeepSeek Harness Web UI | vibebox, when their `TOOL_*` flag is `true` | vibebox updates with upstream tools; **you** configure and manage services |
 | **Your own software** | anything else you install or run | you | you |
 
 A pre-installed user application:
@@ -474,7 +491,7 @@ A pre-installed user application:
 - is installed into **your home** by its upstream installer, running **as
   you**, never as root, and runs as your systemd **user** service;
 - is installed if missing and updated when present if listed in
-  `TOOLS_OPTIONAL` (unless `TOOLS_UPDATE_POLICY=locked`); updates preserve
+  `TOOL_*` flag is `true` (unless `TOOLS_UPDATE_POLICY=locked`); updates preserve
   your configuration, and the WebUI service restarts only when its checkout
   changes and the service is active;
 - remains yours to configure and manage. Vibebox ships no root copy or system
@@ -507,18 +524,18 @@ The WebUI listens on `127.0.0.1:8787` by default and finds the agent in
 `~/.hermes/hermes-agent`. Its unit, `~/.config/systemd/user/hermes-webui.service`,
 follows upstream's
 [supervisor guide](https://github.com/nesquena/hermes-webui/blob/master/docs/supervisor.md)
-and is yours to edit. To skip a pre-installed application, leave it out of
-`TOOLS_OPTIONAL`; to remove one, use its own uninstall (`hermes uninstall`, or
-disable the unit and delete the checkout).
+and is yours to edit. To skip a pre-installed application, set its `TOOL_*` flag to `false`; that
+removes the code but keeps its configuration. For a full wipe, use its own uninstall (`hermes uninstall`, or disable the unit
+and delete the checkout).
 
 ### DeepSeek Harness (optional)
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`, MIT)
 is an agent harness from DeepSeek AI, shipped as the npm package
-`@deepseek-ai/dsh`. It is pre-packaged and listed in the example `TOOLS_OPTIONAL`.
-The package needs Node.js 24.9+, which `NODE_MAJOR=24` provides. Existing
-`vibebox.env` files keep their own list: to add it, include `deepseek-harness` in
-`TOOLS_OPTIONAL`, set `NODE_MAJOR=24` or newer, then run `vibebox update tools`.
+`@deepseek-ai/dsh`. It is pre-packaged and enabled by `TOOL_DEEPSEEK_HARNESS=true`
+in the example. The package needs Node.js 24.9+, which `NODE_MAJOR=24` provides.
+To add it to an existing `vibebox.env`, set `TOOL_DEEPSEEK_HARNESS=true` and
+`NODE_MAJOR=24` or newer, then run `vibebox update tools`.
 
 Vibebox installs it into `~/.local/share/deepseek-harness` with npm, never
 globally, and runs `dsh web --no-open` as the user service `deepseek-harness`.
@@ -529,7 +546,7 @@ The Web UI listens on `127.0.0.1:3080` only. Its unit is
 |---|---|
 | Restart the Web UI | `systemctl --user restart deepseek-harness` |
 | Update DeepSeek Harness | `npm install --prefix ~/.local/share/deepseek-harness @deepseek-ai/dsh@latest`, then restart it |
-| Remove it | Take it out of `TOOLS_OPTIONAL`, `systemctl --user disable --now deepseek-harness`, and delete `~/.local/share/deepseek-harness` |
+| Remove it | Set `TOOL_DEEPSEEK_HARNESS=false`, then `vibebox update tools` (or `systemctl --user disable --now deepseek-harness` and delete `~/.local/share/deepseek-harness` by hand) |
 
 The upstream project is a **developer preview** with a
 [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md):
@@ -633,7 +650,7 @@ symlinks retargeted from `/home/dev`. Conformance runs 16 pass / 1 fail /
 - **Pre-installed by vibebox, owned and configured by the user** is the
   durable principle (2026-09-29). Hermes and the Hermes WebUI are installed
   into the user's home and updated through their upstream tools when listed in
-  `TOOLS_OPTIONAL`; Vibebox does not supervise or wrap them. An earlier design
+  their `TOOL_*` flags; Vibebox does not supervise or wrap them. An earlier design
   with root copies and system units produced three drifting
   Hermes installs; see "What vibebox owns, and what you own".
 - Maintenance is two pre-installed, user-configured jobs (`MAINTENANCE_*`):

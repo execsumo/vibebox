@@ -4,6 +4,13 @@ set -Eeuo pipefail
 
 source /opt/vibebox/read-env.sh
 read_vibebox_env /etc/vibebox/vibebox.env
+# shellcheck source=/dev/null
+source /opt/vibebox/optional-tools.sh
+enabled_optional_tools=()
+for tool in "${VIBEBOX_OPTIONAL_TOOLS[@]}"; do
+    optional_tool_enabled "$tool" && enabled_optional_tools+=("$tool")
+done
+export VIBEBOX_ENABLED_OPTIONAL="${enabled_optional_tools[*]:-}"
 
 json_escape() {
     python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))'
@@ -70,7 +77,7 @@ required = {}
 for tool in ("claude", "codex", "bun", "node", "go", "gh", "docker"):
     required[tool] = version(tool)[0]
 optional = {}
-configured_optional = [item.strip() for item in os.environ.get("TOOLS_OPTIONAL", "").split(",") if item.strip()]
+configured_optional = os.environ.get("VIBEBOX_ENABLED_OPTIONAL", "").split()
 for tool in configured_optional:
     optional[tool] = version(tool)[0]
 

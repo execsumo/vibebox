@@ -4,6 +4,7 @@
 #
 # Usage: user-apps.sh install <user> <app>...
 #        user-apps.sh sync <user> <app>...
+#        user-apps.sh remove <user> <app>
 #        user-apps.sh present <user> <app>
 #        user-apps.sh version <user> <app>
 # Apps:  hermes, hermes-webui, deepseek-harness
@@ -184,9 +185,35 @@ install_app() {
     esac
 }
 
+# Removes the application's code and launcher and stops its service. Data the
+# user made is kept: ~/.hermes (configuration, sessions, memory), the WebUI's
+# .env, and the unit files, which the user may have edited. Those are named
+# in the output so the user can delete them by hand if they want them gone.
+remove_app() {
+    case "$1" in
+        hermes)
+            [[ -x "$home/.local/bin/hermes" ]] && as_user "$home/.local/bin/hermes" gateway stop >/dev/null 2>&1 || true
+            as_user rm -rf "$home/.hermes/hermes-agent" "$home/.local/bin/hermes"
+            printf 'hermes: removed the agent and launcher; kept %s/.hermes configuration\n' "$home"
+            ;;
+        hermes-webui)
+            as_user systemctl --user disable --now hermes-webui.service >/dev/null 2>&1 || true
+            as_user rm -rf "$webui_dir"
+            printf 'hermes-webui: removed the checkout; kept %s (disabled)\n' "$webui_unit"
+            ;;
+        deepseek-harness)
+            as_user systemctl --user disable --now deepseek-harness.service >/dev/null 2>&1 || true
+            as_user rm -rf "$dsh_dir"
+            printf 'deepseek-harness: removed the package; kept %s (disabled)\n' "$dsh_unit"
+            ;;
+        *) printf 'unknown user app: %s\n' "$1" >&2; return 2 ;;
+    esac
+}
+
 case "$action" in
     present) present "${1:?app is required}" ;;
     version) version "${1:?app is required}" ;;
+    remove) remove_app "${1:?app is required}" ;;
     install|sync)
         status=0
         for app in "$@"; do

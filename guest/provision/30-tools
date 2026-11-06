@@ -7,13 +7,13 @@ ROOT=${VIBEBOX_ROOT:-/opt/vibebox}
 # shellcheck source=/dev/null
 source "$ROOT/read-env.sh"
 read_vibebox_env "$CONFIG_FILE"
+# shellcheck source=/dev/null
+source "$ROOT/optional-tools.sh"
 
 manifest_lock=${ROOT}/manifest.lock
 optional_tools=()
-IFS=',' read -r -a configured_optional <<< "${TOOLS_OPTIONAL:-}"
-for configured in "${configured_optional[@]}"; do
-    configured=${configured//[[:space:]]/}
-    [[ -n "$configured" ]] && optional_tools+=("$configured")
+for tool in "${VIBEBOX_OPTIONAL_TOOLS[@]}"; do
+    optional_tool_enabled "$tool" && optional_tools+=("$tool")
 done
 required_tools=(claude codex bun node go gh docker)
 
@@ -217,6 +217,35 @@ tool_present() {
     fi
     command -v "$1" >/dev/null 2>&1
 }
+
+# A tool flagged false is removed when present, so flipping a flag and running
+# provision or update tools converges the VM. Required tools are never touched.
+# Walk the list backwards so hermes-webui goes before the hermes it depends on.
+remove_optional_tool() {
+    local tool=$1 package
+    case "$tool" in
+        codeburn|pi|codegraph|gws)
+            package=$(npm_package_for "$tool")
+            npm uninstall --global --no-fund --no-audit "$package" ;;
+        herdr|droid|agy)
+            rm -f "/usr/local/bin/$tool" ;;
+        infisical)
+            apt-get remove -y infisical ;;
+        docling)
+            python3 -m pip uninstall -y --break-system-packages docling pdftotext ;;
+        hermes|hermes-webui|deepseek-harness)
+            "$user_apps_helper" remove "$GUEST_USER" "$tool" ;;
+        *) return 1 ;;
+    esac
+}
+
+for ((i = ${#VIBEBOX_OPTIONAL_TOOLS[@]} - 1; i >= 0; i--)); do
+    tool=${VIBEBOX_OPTIONAL_TOOLS[i]}
+    enabled_optional "$tool" && continue
+    tool_present "$tool" || continue
+    printf 'optional: removing %s (%s=false)\n' "$tool" "$(optional_tool_var "$tool")"
+    remove_optional_tool "$tool" || printf 'optional: removing %s failed\n' "$tool" >&2
+done
 
 missing_required=()
 for tool in "${required_tools[@]}"; do

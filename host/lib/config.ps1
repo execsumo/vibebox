@@ -1,5 +1,11 @@
 Set-StrictMode -Version Latest
 
+# Keep in step with guest/optional-tools.sh. Each tool gets a TOOL_<NAME> flag.
+$script:VibeboxOptionalTools = @(
+    "agy", "herdr", "droid", "hermes", "hermes-webui", "deepseek-harness",
+    "codeburn", "pi", "codegraph", "gws", "docling", "infisical"
+)
+
 $script:VibeboxConfigKeys = @(
     "VM_NAME",
     "UBUNTU_RELEASE",
@@ -15,7 +21,6 @@ $script:VibeboxConfigKeys = @(
     "GUEST_TIMEZONE",
     "TAILSCALE_TAG",
     "NODE_MAJOR",
-    "TOOLS_OPTIONAL",
     "TOOLS_UPDATE_POLICY",
     "MAINTENANCE_ENABLED",
     "MAINTENANCE_DAILY_AT",
@@ -23,7 +28,7 @@ $script:VibeboxConfigKeys = @(
     "BACKUP_DEST",
     "BACKUP_RETENTION_DAYS",
     "READINESS_TIMEOUT_SEC"
-)
+) + @($script:VibeboxOptionalTools | ForEach-Object { "TOOL_" + ($_.ToUpperInvariant() -replace '-', '_') })
 
 function Get-VibeboxRepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
@@ -202,11 +207,9 @@ function Assert-VibeboxConfig {
         throw "READINESS_TIMEOUT_SEC must be a positive integer."
     }
 
-    $allowedOptional = @("agy", "herdr", "droid", "hermes", "hermes-webui", "deepseek-harness", "codeburn", "pi", "codegraph", "gws", "docling", "infisical")
-    foreach ($tool in (ConvertTo-VibeboxList $v.TOOLS_OPTIONAL)) {
-        if ($tool -notin $allowedOptional) {
-            throw "TOOLS_OPTIONAL contains unsupported tool '$tool'."
-        }
+    foreach ($tool in $script:VibeboxOptionalTools) {
+        $key = "TOOL_" + ($tool.ToUpperInvariant() -replace '-', '_')
+        $null = ConvertTo-VibeboxBoolean -Value $v[$key] -Name $key
     }
 }
 
@@ -225,6 +228,11 @@ function Get-VibeboxConfig {
     $declared = [ordered]@{}
     if (Test-Path -LiteralPath $envPath -PathType Leaf) {
         $declared = Read-VibeboxKeyValueFile -Path $envPath
+    }
+    # A leftover list would be silently ignored, and its tools would stop
+    # matching what the VM has. Refuse until the file uses the per-tool flags.
+    if ($declared.Contains("TOOLS_OPTIONAL")) {
+        throw "TOOLS_OPTIONAL was replaced by one flag per tool. Remove that line from $envPath and set each tool to true or false (for example TOOL_HERDR=true). vibebox.env.example lists them all."
     }
 
     $values = [ordered]@{}

@@ -33,7 +33,6 @@ read_vibebox_env "$CONFIG_FILE"
 : "${GUEST_SWAP_GB:?GUEST_SWAP_GB is required}"
 : "${GUEST_TIMEZONE:?GUEST_TIMEZONE is required}"
 : "${NODE_MAJOR:?NODE_MAJOR is required}"
-: "${TOOLS_OPTIONAL:=}"
 : "${TOOLS_UPDATE_POLICY:=latest}"
 
 export VIBEBOX_ROOT CONFIG_FILE
